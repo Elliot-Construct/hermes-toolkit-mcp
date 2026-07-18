@@ -1,0 +1,4 @@
+providers:
+  default: fake-provider
+model: fake-model
+mcp_servers: {}

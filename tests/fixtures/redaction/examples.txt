@@ -1,0 +1,3 @@
+Authorization: Bearer <SYNTHETIC_TOKEN>
+api_key=<SYNTHETIC_API_KEY>
+password=<SYNTHETIC_PASSWORD>

@@ -1,0 +1,35 @@
+.venv/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build/package outputs
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Test/coverage/type-check caches
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.pyre/
+.ruff_cache/
+.tox/
+.nox/
+
+# Local runtime artifacts
+.artifacts/
+evidence/value-shaped-secret-scan.json
+*.log
+*.tmp
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo

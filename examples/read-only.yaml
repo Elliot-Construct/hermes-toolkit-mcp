@@ -1,0 +1,11 @@
+# Conservative starter configuration. Read-only local discovery only.
+policy:
+  mode: read_only
+  allow_live_api_calls: false
+  allow_model_spend: false
+  allow_agent_tool_calls: false
+  allow_external_side_effects: false
+  allow_gateway_restart: false
+  allow_config_write: false
+  allow_skill_write: false
+  allow_git_mutation: false
