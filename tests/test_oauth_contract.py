@@ -195,6 +195,21 @@ def test_rate_limit_key_is_the_proxy_appended_address_not_the_caller_claim() -> 
     assert client_key(trailing) == "10.0.0.9"
 
 
+def test_rate_limit_key_ignores_forwarded_claim_from_a_direct_loopback_caller() -> None:
+    """A caller that reaches the listener directly chose its own X-Forwarded-For.
+
+    Honouring it would let a local process or a container pick its rate-limit
+    bucket (or burn someone else's), so from loopback the socket peer wins.
+    """
+    from hermes_toolkit_mcp.oauth.ratelimit import client_key
+
+    direct = _request({"x-forwarded-for": "203.0.113.9"}, client=("127.0.0.1", 5555))
+    assert client_key(direct) == "127.0.0.1"
+
+    via_proxy = _request({"x-forwarded-for": "203.0.113.9"}, client=("172.18.0.2", 5555))
+    assert client_key(via_proxy) == "203.0.113.9"
+
+
 def test_sliding_window_limiter_counts_attempts_and_reports_retry_after() -> None:
     from hermes_toolkit_mcp.oauth.ratelimit import SlidingWindowLimiter
 
@@ -228,6 +243,14 @@ def test_ttl_map_takes_are_single_use_and_bounded() -> None:
 
 
 # --- contract document itself -----------------------------------------------
+
+
+def test_client_registrations_expire_and_the_store_refuses_when_full() -> None:
+    """Review finding (availability): anonymous DCR must not outlive its welcome."""
+    from hermes_toolkit_mcp.oauth.provider import _CLIENT_TTL_SECONDS
+
+    assert _CLIENT_TTL_SECONDS == 30 * 24 * 3600, "registrations age out after 30 days, not a decade"
+    assert _config({"oauth": {"max_registered_clients": 2}}).http.oauth.max_registered_clients == 2
 
 
 def test_contract_document_is_present_and_locked() -> None:

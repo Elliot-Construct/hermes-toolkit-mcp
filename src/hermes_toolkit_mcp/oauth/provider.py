@@ -30,6 +30,7 @@ public prefixed path and 404 in production.
 from __future__ import annotations
 
 import hmac
+import logging
 import time
 from dataclasses import dataclass
 from urllib.parse import urlsplit
@@ -57,6 +58,8 @@ from .interfaces import (
 )
 from .state import TOKEN_PREFIX, TtlMap, new_request_id, new_token, token_digest
 
+logger = logging.getLogger(__name__)
+
 #: The deployment has exactly one resource owner (contract §5). This is a
 #: stable label stamped on token records for their whole life — never a
 #: credential, never compared against anything that authenticates.
@@ -70,10 +73,12 @@ CODE_PREFIX = "hmtc_"
 #: but the prefix still tells a log reader which sort of secret leaked.
 REFRESH_PREFIX = "hmtr_"
 
-#: Client registrations outlive every token by orders of magnitude, yet the
-#: store stays TTL-bound so an abandoned deployment cannot leak entries for
-#: ever. Ten years is effectively "until the process dies".
-_CLIENT_TTL_SECONDS = 10 * 365 * 24 * 3600
+#: Client registrations outlive every token, but not for ever: thirty days
+#: matches how often an MCP client actually re-registers, and it means the
+#: anonymous DCR surface cannot accumulate dead entries (contract §3.4, review
+#: finding on store availability). The store is in-memory, so a restart also
+#: clears it — the documented operator remedy if it ever fills.
+_CLIENT_TTL_SECONDS = 30 * 24 * 3600
 
 #: Hosts that may use plain http as a redirect URI (contract §3.4). Anything
 #: https is fine anywhere; anything http is fine only where the peer is
@@ -119,7 +124,7 @@ class ToolkitOAuthProvider(
     ==================  ================  ==========================================
     Store               Key               Bound
     ==================  ================  ==========================================
-    clients             ``client_id``     ``max_registered_clients``; ten-year TTL
+    clients             ``client_id``     ``max_registered_clients``; thirty-day TTL, refused when full
     authorization codes digest of code    default map cap; five-minute TTL, single use
     access tokens       digest of token   default map cap; ``access_token_ttl_seconds``
     refresh tokens      digest of token   default map cap; ``refresh_token_ttl_seconds``
@@ -154,6 +159,8 @@ class ToolkitOAuthProvider(
         self._access: TtlMap[AccessToken] = TtlMap(name="oauth-access-tokens")
         self._refresh: TtlMap[RefreshToken] = TtlMap(name="oauth-refresh-tokens")
         self._pending: TtlMap[_PendingRequest] = TtlMap(name="oauth-pending-requests")
+        #: One-shot latch so the 80%% fill warning cannot spam the log.
+        self._store_warning_emitted = False
 
     # -- clients (dynamic registration, contract §3.3-3.4) ----------------
 
@@ -181,10 +188,29 @@ class ToolkitOAuthProvider(
             raise RegistrationError("invalid_client_metadata", "client_id is required")
         for uri in client_info.redirect_uris or ():
             self._check_redirect_uri(str(uri))
-        if len(self._clients) >= self._oauth.max_registered_clients:
+        used = len(self._clients)
+        if used >= int(self._oauth.max_registered_clients * 0.8) and not self._store_warning_emitted:
+            # Availability, not secrecy: an anonymous caller can fill this
+            # store, and the operator must see it coming rather than learn
+            # about it from a client that suddenly cannot register.
+            self._store_warning_emitted = True
+            logger.warning(
+                "oauth client store at %d/%d registrations (DCR is open; entries age out after %d days)",
+                used,
+                self._oauth.max_registered_clients,
+                _CLIENT_TTL_SECONDS // 86_400,
+            )
+        if used >= self._oauth.max_registered_clients:
             # Refuse, never evict: dropping the oldest client would break a
-            # live integration, and the cap exists precisely because
-            # registration is anonymous (contract §3.4, §7).
+            # live integration that is working perfectly well, and the cap
+            # exists precisely because registration is anonymous (§3.4, §7).
+            # Refusal is scoped to NEW registrations — every stored client and
+            # every issued token keeps working — and a process restart clears
+            # the store if a fill-up ever has to be undone by hand.
+            logger.warning(
+                "oauth client store full at %d registrations: refusing new DCR registrations",
+                used,
+            )
             raise RegistrationError("invalid_client_metadata", "registration limit reached")
         self._clients.set(client_id, client_info, ttl_seconds=_CLIENT_TTL_SECONDS)
 

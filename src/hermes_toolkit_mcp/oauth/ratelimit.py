@@ -15,6 +15,10 @@ from collections import OrderedDict, deque
 
 from starlette.requests import Request
 
+#: Peers whose address is authoritative: they connected directly to this
+#: loopback listener, so any forwarded header they sent is their own claim.
+_LOOPBACK_PEERS = frozenset({"127.0.0.1", "::1", "[::1]", "localhost"})
+
 
 class SlidingWindowLimiter:
     """Allow ``limit`` events per key inside ``window_seconds``."""
@@ -62,21 +66,30 @@ class SlidingWindowLimiter:
 
 
 def client_key(request: Request) -> str:
-    """Coarse caller identity: the address the reverse proxy recorded for us.
+    """Coarse caller identity for rate limiting.
 
-    Traefik is the only thing that can reach this loopback listener, and on
-    this box it runs with the default trust-all ``forwardedHeaders``, which
-    *appends* the address it saw to any ``X-Forwarded-For`` the caller already
-    sent. So the first entry is the caller's own claim — spoofable, and with
-    it the rate-limit bucket — while the **last** entry is the one Traefik
-    wrote. Take the last, fall back to the socket peer when the header is
-    absent (direct loopback callers, tests).
+    Two rules, in order:
+
+    1. **A loopback peer is its own key.** Anything reaching this listener
+       directly (local process, container via the host) chose its own
+       ``X-Forwarded-For`` header, so honouring it would let that caller pick
+       its rate-limit bucket — or burn a stranger's. From loopback the only
+       honest identity is the socket peer.
+    2. **Otherwise take the last ``X-Forwarded-For`` entry.** Traefik on this
+       box runs with the default trust-all ``forwardedHeaders``, which
+       *appends* the address it saw to whatever the client already sent: the
+       first entry is the caller's claim, the last is the proxy's observation.
+       Absent the header, fall back to the socket peer (never to an empty
+       string, which would merge every such caller into one bucket).
     """
+    peer = (request.client.host if request.client else "") or ""
+    if peer in _LOOPBACK_PEERS:
+        return peer
     forwarded = request.headers.get("x-forwarded-for", "")
     if forwarded:
         last = forwarded.split(",")[-1].strip()
         if last:
             return last
-    if request.client:
-        return request.client.host
+    if peer:
+        return peer
     return "unknown"

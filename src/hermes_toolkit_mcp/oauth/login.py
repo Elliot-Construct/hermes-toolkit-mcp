@@ -24,6 +24,7 @@ British English throughout; zero external requests.
 from __future__ import annotations
 
 import html
+import logging
 from urllib.parse import urlsplit
 
 from starlette.requests import Request
@@ -40,6 +41,11 @@ from .interfaces import (
 from .ratelimit import SlidingWindowLimiter, client_key
 
 SERVICE_NAME = "Hermes Toolkit MCP"
+
+#: Failed sign-ins are the one event an operator needs to see (a distributed
+#: guess leaves no other trace), so they go to the standard log — carrying the
+#: caller address and outcome only, never the username, password or request id.
+logger = logging.getLogger(__name__)
 
 #: Shown for every credential failure.  One message for every failure mode on
 #: purpose: "which field was wrong" is an oracle, and nothing the user typed
@@ -285,6 +291,7 @@ def build_login_routes(
             if exc.code == UNKNOWN_REQUEST:
                 return _notice_response(EXPIRED_ERROR, status_code=400, issuer_origin=issuer_origin)
             if exc.code == INVALID_CREDENTIALS:
+                logger.warning("oauth login refused (invalid credentials) caller=%s", key)
                 # 200 with the same form: the request survives a wrong
                 # password so the user can simply retry, and the message
                 # never says which field was wrong (contract §5).
