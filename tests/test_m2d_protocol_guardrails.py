@@ -10,10 +10,10 @@ from typing import Any
 
 import pytest
 
+from hermes_toolkit_mcp.a2aorch_api_docs import A2AORCH_WRAPPER_MAPPING
 from hermes_toolkit_mcp.api_client import ALLOWED_ROUTES, RouteDeniedError, authorize_api_route, find_api_route
 from hermes_toolkit_mcp.api_docs import WRAPPER_MAPPING
 from hermes_toolkit_mcp.config import ToolkitMcpConfig
-from hermes_toolkit_mcp.kanban_api_docs import KANBAN_WRAPPER_MAPPING
 from hermes_toolkit_mcp.policy import PolicyTier
 from hermes_toolkit_mcp.server import TOOL_SPECS, build_resource_definitions, build_tool_definitions, execute_tool
 
@@ -162,22 +162,39 @@ def test_m2d_raw_api_request_fallback_remains_denied_for_classified_routes() -> 
         assert denied.value.code == "RAW_FALLBACK_DENIED"
 
 
-def test_m2d_raw_api_request_fallback_remains_denied_for_kanban_routes() -> None:
-    for mapping in KANBAN_WRAPPER_MAPPING:
-        if mapping["status"] != "implemented_typed_wrapper":
-            continue
-        method, path = mapping["endpoint"].split(" ", 1)
-        # The docs use `:param` path notation, but route-table compilation accepts both.
-        sample = path.replace(":id", "t_12345678").replace(":name", "backend-eng").replace(":run_id", "741")
+def test_m2d_raw_api_request_fallback_denies_a2aorch_denied_and_unknown_routes() -> None:
+    """The 7 a2aorch routes without a safe typed wrapper stay fail-closed."""
+    explicitly_denied = [
+        ("POST", "/api/v1/agents/register"),
+        ("POST", "/api/v1/dm"),
+        ("GET", "/api/v1/tasks/ACME-12/sessions/alfred/session_1/messages"),
+        ("GET", "/api/v1/system/logs"),
+        ("POST", "/api/v1/system/pause"),
+        ("POST", "/api/v1/system/resume"),
+        ("POST", "/api/v1/system/reconcile"),
+    ]
+    assert len(explicitly_denied) == 7
+
+    for method, path in explicitly_denied:
         with pytest.raises(RouteDeniedError) as denied:
             authorize_api_route(
                 method,
-                sample,
+                path,
                 configured_tier=PolicyTier.OWNER,
-                typed_wrapper_name=mapping["tool"],
+                typed_wrapper_name="hermes_a2aorch_raw_request",
                 raw_fallback=True,
             )
-        assert denied.value.code == "RAW_FALLBACK_DENIED"
+        assert denied.value.code == "EXPLICITLY_DENIED"
+
+    with pytest.raises(RouteDeniedError) as unknown:
+        authorize_api_route(
+            "GET",
+            "/api/v1/not-a-registry-route",
+            configured_tier=PolicyTier.OWNER,
+            typed_wrapper_name="hermes_a2aorch_raw_request",
+            raw_fallback=True,
+        )
+    assert unknown.value.code == "UNKNOWN_ROUTE"
 
 
 def test_m2d_planned_routes_are_not_in_allowed_routes() -> None:
@@ -185,10 +202,11 @@ def test_m2d_planned_routes_are_not_in_allowed_routes() -> None:
     allowed_tools = {route.typed_wrapper_name for route in ALLOWED_ROUTES}
     planned = [
         mapping
-        for mapping in (*WRAPPER_MAPPING, *KANBAN_WRAPPER_MAPPING)
+        for mapping in (*WRAPPER_MAPPING, *A2AORCH_WRAPPER_MAPPING)
         if mapping.get("status") == "planned_typed_wrapper"
     ]
     assert planned
+    assert sum(1 for mapping in A2AORCH_WRAPPER_MAPPING if mapping.get("status") == "planned_typed_wrapper") == 7
 
     for mapping in planned:
         method, path = mapping["endpoint"].split(" ", 1)

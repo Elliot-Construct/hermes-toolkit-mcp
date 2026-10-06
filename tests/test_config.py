@@ -21,9 +21,14 @@ def test_config_loading_from_yaml(tmp_path: Path) -> None:
                     "api": {
                         "base_url": "http://127.0.0.1:8642/v1",
                         "api_key_env": "API_SERVER_KEY",
-                        "dashboard_base_url": "http://127.0.0.1:9119",
                         "docs": {"cache_path": "api-docs/hermes-api-server.md"},
                     },
+                },
+                "a2aorch": {
+                    "base_url": "http://127.0.0.1:9210/api/v1",
+                    "token_env": "A2AORCH_TEST_TOKEN",
+                    "token": "direct-a2aorch-token",
+                    "request_timeout_seconds": 45,
                 },
                 "toolkit": {"root": str(fake_toolkit)},
                 "artifacts": {"root": str(artifact_root)},
@@ -44,8 +49,10 @@ def test_config_loading_from_yaml(tmp_path: Path) -> None:
     assert config.artifacts.root == artifact_root
     assert config.policy.mode is PolicyTier.API_DOCS
     assert config.hermes.api.base_url == "http://127.0.0.1:8642/v1"
-    assert config.hermes.api.dashboard_base_url == "http://127.0.0.1:9119"
-    assert config.hermes.api.dashboard_api_key_env is None
+    assert config.a2aorch.base_url == "http://127.0.0.1:9210/api/v1"
+    assert config.a2aorch.token_env == "A2AORCH_TEST_TOKEN"
+    assert config.a2aorch.token == "direct-a2aorch-token"
+    assert config.a2aorch.request_timeout_seconds == 45
     assert tmp_path / "extra" in config.allowed_roots()
 
 

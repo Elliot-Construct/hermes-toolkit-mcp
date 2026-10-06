@@ -15,15 +15,32 @@ The package uses the official Python `mcp` SDK as the protocol baseline (`mcp>=1
 | Tier | Tools |
 |------|-------|
 | M1 read-only | `hermes_status_overview`, `hermes_detect_install`, `hermes_toolkit_info`, `hermes_profiles_list`, `hermes_config_summary` |
-| M2a API docs | `hermes_api_docs_list`, `hermes_api_docs_read`, `hermes_kanban_api_docs_list`, `hermes_kanban_api_docs_read` |
+| M2a API docs | `hermes_api_docs_list`, `hermes_api_docs_read`, `hermes_a2aorch_api_docs_list`, `hermes_a2aorch_api_docs_read` |
 | M2c Hermes API metadata | `hermes_api_models_list`, `hermes_api_capabilities_get`, `hermes_api_health`, `hermes_api_health_detailed`, `hermes_api_skills_list`, `hermes_api_toolsets_list` |
 | M2c Hermes API calls | `hermes_api_chat_completions`, `hermes_api_responses_create`, `hermes_api_responses_get`, `hermes_api_responses_delete`, `hermes_api_runs_start`, `hermes_api_runs_get`, `hermes_api_runs_events`, `hermes_api_runs_stop`, `hermes_api_runs_approval`, `hermes_api_jobs_list`, `hermes_api_jobs_create`, `hermes_api_jobs_get`, `hermes_api_jobs_update`, `hermes_api_jobs_delete`, `hermes_api_jobs_pause`, `hermes_api_jobs_resume`, `hermes_api_jobs_run` |
-| M2c Kanban API metadata | `hermes_kanban_board_get`, `hermes_kanban_task_get`, `hermes_kanban_workers_active`, `hermes_kanban_run_get`, `hermes_kanban_run_inspect`, `hermes_kanban_profiles_list`, `hermes_kanban_orchestration_get`, `hermes_kanban_config_get` |
-| M2c Kanban API calls | `hermes_kanban_task_create`, `hermes_kanban_task_update`, `hermes_kanban_tasks_bulk_update`, `hermes_kanban_task_comment_create`, `hermes_kanban_link_create`, `hermes_kanban_link_delete`, `hermes_kanban_task_specify`, `hermes_kanban_task_decompose`, `hermes_kanban_profile_update`, `hermes_kanban_orchestration_update`, `hermes_kanban_dispatch_nudge` |
+| M2c A2AORCH registry metadata | `hermes_a2aorch_projects_list`, `hermes_a2aorch_project_get`, `hermes_a2aorch_project_tasks_list`, `hermes_a2aorch_tasks_list`, `hermes_a2aorch_task_get`, `hermes_a2aorch_task_events`, `hermes_a2aorch_task_links_list`, `hermes_a2aorch_task_session_get`, `hermes_a2aorch_task_sessions_list`, `hermes_a2aorch_agents_list`, `hermes_a2aorch_hitl_inbox`, `hermes_a2aorch_system_status`, `hermes_a2aorch_guardian_status` |
+| M2c A2AORCH registry calls | `hermes_a2aorch_project_create`, `hermes_a2aorch_project_update`, `hermes_a2aorch_subscriber_add`, `hermes_a2aorch_subscriber_remove`, `hermes_a2aorch_task_create`, `hermes_a2aorch_task_update`, `hermes_a2aorch_task_status`, `hermes_a2aorch_task_claim`, `hermes_a2aorch_task_reassign`, `hermes_a2aorch_task_comment_create`, `hermes_a2aorch_task_block`, `hermes_a2aorch_task_input`, `hermes_a2aorch_hitl_respond`, `hermes_a2aorch_session_control`, `hermes_a2aorch_link_create`, `hermes_a2aorch_link_delete` |
 | M2d smoke / M3 eval / M4-M5 diagnostics | `hermes_api_smoke`, `hermes_eval_suites_list`, `hermes_eval_run`, `hermes_eval_start`, `hermes_job_status`, `hermes_job_cancel`, `hermes_deploy_guard_check`, `hermes_config_compare_surfaces`, `hermes_deploy_repair_plan`, `hermes_gateway_status`, `hermes_log_tail` |
 | M6 skill workflow | `hermes_skills_list`, `hermes_skill_read`, `hermes_skill_eval_start`, `hermes_skill_patch_proposal` |
 | M7 fallback | `hermes_agent_ask_fallback` |
 | M8 mutation | `hermes_skill_patch_apply`, `hermes_config_patch_apply`, `hermes_gateway_restart`, `hermes_deploy_repair_apply` |
+
+## A2AORCH registry integration
+
+The task surface is [a2aorch](https://github.com/Elliot-Construct/a2aorch), the team's task registry — this fork replaces the upstream project's Kanban dashboard-plugin tools one-for-one.
+
+- **Origin.** Registry calls are routed to `a2aorch.base_url` (default `http://127.0.0.1:8895/api/v1`), not to the Hermes API `base_url`. The Hermes `/v1` and `/api/jobs` surfaces are untouched.
+- **Auth.** Bearer token from `a2aorch.token_env` (default `A2AORCH_TOKEN`), falling back to `a2aorch.token` in the config file; the env var wins. Tokens are only ever written to headers, never to artifact receipts — receipts carry `credential_source` and a presence boolean.
+- **Route table.** Fail-closed like everything else: only endpoints listed as `implemented_typed_wrapper` in `A2AORCH_WRAPPER_MAPPING` are reachable, each only through its own named wrapper. Dangerous or unwrapped routes (`POST /agents/register`, `POST /dm`, `GET /system/logs`, `POST /system/pause|resume|reconcile`, session transcript reads) are explicitly denied with a reason; documented-but-unwrapped routes stay `planned_typed_wrapper` and never enter the table.
+- **Status discipline.** `hermes_a2aorch_task_update` (PATCH) deliberately has no `status` field — the gateway ignores one, so status only moves through `hermes_a2aorch_task_status`, which enforces the legal transition table. Pause, archived and blocked are overlays, never statuses.
+- **Docs.** `hermes_a2aorch_api_docs_list` / `_read` and the `hermes-docs://a2aorch-api/*` resources serve a bundled Markdown snapshot of the registry REST surface; they never refresh from the network.
+
+```yaml
+a2aorch:
+  base_url: "http://127.0.0.1:8895/api/v1"
+  token_env: A2AORCH_TOKEN
+  request_timeout_seconds: 900   # reassign/session control ride the A2A bridge synchronously
+```
 
 ## Goals
 

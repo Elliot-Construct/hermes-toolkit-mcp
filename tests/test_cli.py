@@ -310,11 +310,11 @@ def test_config_check_optional_triage_missing_is_warning_only(tmp_path: Path, ca
     assert parsed["resolved_policy"]["active_required_problems"] == []
 
 
-def test_config_check_does_not_emit_raw_secrets(tmp_path: Path, capsys) -> None:
+def test_config_check_does_not_emit_raw_a2aorch_token(tmp_path: Path, capsys) -> None:
     toolkit = tmp_path / "toolkit"
     _write_minimal_toolkit(toolkit)
     config_path = tmp_path / "config.yaml"
-    secret = "super-secret-api-key"
+    secret = "super-secret-a2aorch-token"
     config_path.write_text(
         textwrap.dedent(
             f"""
@@ -322,8 +322,8 @@ def test_config_check_does_not_emit_raw_secrets(tmp_path: Path, capsys) -> None:
               homes:
                 default: {tmp_path / "home"}
               default_profile: default
-              api:
-                dashboard_auth_password: {secret}
+            a2aorch:
+              token: {secret}
             toolkit:
               root: {toolkit}
             artifacts:
@@ -340,4 +340,4 @@ def test_config_check_does_not_emit_raw_secrets(tmp_path: Path, capsys) -> None:
     captured = capsys.readouterr()
     assert secret not in captured.out
     parsed = json.loads(captured.out)
-    assert parsed["dashboard_pw_present"] is True
+    assert parsed["a2aorch_token_present"] is True

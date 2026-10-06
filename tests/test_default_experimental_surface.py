@@ -47,27 +47,37 @@ def test_default_registration_exposes_full_experimental_surface(tmp_path: Path) 
         "hermes_api_runs_events",
         "hermes_api_runs_stop",
         "hermes_api_runs_approval",
-        "hermes_kanban_api_docs_list",
-        "hermes_kanban_api_docs_read",
-        "hermes_kanban_board_get",
-        "hermes_kanban_task_get",
-        "hermes_kanban_workers_active",
-        "hermes_kanban_run_get",
-        "hermes_kanban_run_inspect",
-        "hermes_kanban_task_create",
-        "hermes_kanban_task_update",
-        "hermes_kanban_tasks_bulk_update",
-        "hermes_kanban_task_comment_create",
-        "hermes_kanban_link_create",
-        "hermes_kanban_link_delete",
-        "hermes_kanban_task_specify",
-        "hermes_kanban_task_decompose",
-        "hermes_kanban_profiles_list",
-        "hermes_kanban_profile_update",
-        "hermes_kanban_orchestration_get",
-        "hermes_kanban_orchestration_update",
-        "hermes_kanban_dispatch_nudge",
-        "hermes_kanban_config_get",
+        "hermes_a2aorch_api_docs_list",
+        "hermes_a2aorch_api_docs_read",
+        "hermes_a2aorch_projects_list",
+        "hermes_a2aorch_project_get",
+        "hermes_a2aorch_project_tasks_list",
+        "hermes_a2aorch_project_create",
+        "hermes_a2aorch_project_update",
+        "hermes_a2aorch_subscriber_add",
+        "hermes_a2aorch_subscriber_remove",
+        "hermes_a2aorch_tasks_list",
+        "hermes_a2aorch_task_get",
+        "hermes_a2aorch_task_events",
+        "hermes_a2aorch_task_links_list",
+        "hermes_a2aorch_task_session_get",
+        "hermes_a2aorch_task_sessions_list",
+        "hermes_a2aorch_task_create",
+        "hermes_a2aorch_task_update",
+        "hermes_a2aorch_task_status",
+        "hermes_a2aorch_task_claim",
+        "hermes_a2aorch_task_reassign",
+        "hermes_a2aorch_task_comment_create",
+        "hermes_a2aorch_task_block",
+        "hermes_a2aorch_task_input",
+        "hermes_a2aorch_link_create",
+        "hermes_a2aorch_link_delete",
+        "hermes_a2aorch_agents_list",
+        "hermes_a2aorch_hitl_inbox",
+        "hermes_a2aorch_hitl_respond",
+        "hermes_a2aorch_system_status",
+        "hermes_a2aorch_guardian_status",
+        "hermes_a2aorch_session_control",
     }
     for name in expected_new_tools:
         assert name in registered, f"expected new tool {name} to be registered on default experimental surface"
@@ -98,19 +108,19 @@ def test_explicit_read_only_config_still_limits_default_surface(tmp_path: Path) 
     assert "hermes_api_chat_completions" not in names
     assert "hermes_skill_patch_apply" not in names
     assert "hermes_gateway_restart" not in names
-    assert "hermes_kanban_workers_active" not in names
-    assert "hermes_kanban_run_get" not in names
-    assert "hermes_kanban_run_inspect" not in names
+    assert "hermes_a2aorch_tasks_list" not in names
+    assert "hermes_a2aorch_task_events" not in names
+    assert "hermes_a2aorch_session_control" not in names
 
     for blocked in {
         "hermes_api_models_list",
         "hermes_api_health",
         "hermes_api_responses_get",
         "hermes_api_jobs_list",
-        "hermes_kanban_board_get",
-        "hermes_kanban_task_get",
-        "hermes_kanban_profiles_list",
-        "hermes_kanban_orchestration_get",
-        "hermes_kanban_config_get",
+        "hermes_a2aorch_api_docs_read",
+        "hermes_a2aorch_projects_list",
+        "hermes_a2aorch_project_get",
+        "hermes_a2aorch_hitl_inbox",
+        "hermes_a2aorch_system_status",
     }:
         assert blocked not in names

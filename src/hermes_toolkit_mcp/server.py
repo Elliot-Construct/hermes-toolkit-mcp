@@ -68,58 +68,74 @@ from .api_wrappers.hermes_api import (
     hermes_api_skills_list,
     hermes_api_toolsets_list,
 )
-from .api_wrappers.kanban_api import (
-    KANBAN_BOARD_GET_INPUT_SCHEMA,
-    KANBAN_CONFIG_GET_INPUT_SCHEMA,
-    KANBAN_DISPATCH_NUDGE_INPUT_SCHEMA,
-    KANBAN_LINK_CREATE_INPUT_SCHEMA,
-    KANBAN_LINK_DELETE_INPUT_SCHEMA,
-    KANBAN_ORCHESTRATION_GET_INPUT_SCHEMA,
-    KANBAN_ORCHESTRATION_UPDATE_INPUT_SCHEMA,
-    KANBAN_BOARDS_LIST_INPUT_SCHEMA,
-    KANBAN_ASSIGNEES_LIST_INPUT_SCHEMA,
-    KANBAN_PROFILES_LIST_INPUT_SCHEMA,
-    KANBAN_PROFILE_UPDATE_INPUT_SCHEMA,
-    KANBAN_RUN_GET_INPUT_SCHEMA,
-    KANBAN_RUN_INSPECT_INPUT_SCHEMA,
-    KANBAN_TASKS_BULK_UPDATE_INPUT_SCHEMA,
-    KANBAN_TASK_COMMENT_CREATE_INPUT_SCHEMA,
-    KANBAN_TASK_CREATE_INPUT_SCHEMA,
-    KANBAN_TASK_DECOMPOSE_INPUT_SCHEMA,
-    KANBAN_TASK_GET_INPUT_SCHEMA,
-    KANBAN_TASK_SPECIFY_INPUT_SCHEMA,
-    KANBAN_TASK_UPDATE_INPUT_SCHEMA,
-    KANBAN_WORKERS_ACTIVE_INPUT_SCHEMA,
-    hermes_kanban_board_get,
-    hermes_kanban_boards_list,
-    hermes_kanban_config_get,
-    hermes_kanban_dispatch_nudge,
-    hermes_kanban_link_create,
-    hermes_kanban_link_delete,
-    hermes_kanban_orchestration_get,
-    hermes_kanban_orchestration_update,
-    hermes_kanban_profile_update,
-    hermes_kanban_profiles_list,
-    hermes_kanban_run_get,
-    hermes_kanban_run_inspect,
-    hermes_kanban_task_create,
-    hermes_kanban_task_decompose,
-    hermes_kanban_task_get,
-    hermes_kanban_tasks_bulk_update,
-    hermes_kanban_task_comment_create,
-    hermes_kanban_task_specify,
-    hermes_kanban_task_update,
-    hermes_kanban_workers_active,
-    hermes_kanban_assignees_list,
+from .api_wrappers.a2aorch_api import (
+    A2AORCH_AGENTS_LIST_INPUT_SCHEMA,
+    A2AORCH_GUARDIAN_STATUS_INPUT_SCHEMA,
+    A2AORCH_HITL_INBOX_INPUT_SCHEMA,
+    A2AORCH_HITL_RESPOND_INPUT_SCHEMA,
+    A2AORCH_LINK_CREATE_INPUT_SCHEMA,
+    A2AORCH_LINK_DELETE_INPUT_SCHEMA,
+    A2AORCH_PROJECTS_LIST_INPUT_SCHEMA,
+    A2AORCH_PROJECT_CREATE_INPUT_SCHEMA,
+    A2AORCH_PROJECT_GET_INPUT_SCHEMA,
+    A2AORCH_PROJECT_TASKS_LIST_INPUT_SCHEMA,
+    A2AORCH_PROJECT_UPDATE_INPUT_SCHEMA,
+    A2AORCH_SESSION_CONTROL_INPUT_SCHEMA,
+    A2AORCH_SUBSCRIBER_ADD_INPUT_SCHEMA,
+    A2AORCH_SUBSCRIBER_REMOVE_INPUT_SCHEMA,
+    A2AORCH_SYSTEM_STATUS_INPUT_SCHEMA,
+    A2AORCH_TASKS_LIST_INPUT_SCHEMA,
+    A2AORCH_TASK_BLOCK_INPUT_SCHEMA,
+    A2AORCH_TASK_CLAIM_INPUT_SCHEMA,
+    A2AORCH_TASK_COMMENT_CREATE_INPUT_SCHEMA,
+    A2AORCH_TASK_CREATE_INPUT_SCHEMA,
+    A2AORCH_TASK_EVENTS_INPUT_SCHEMA,
+    A2AORCH_TASK_GET_INPUT_SCHEMA,
+    A2AORCH_TASK_INPUT_INPUT_SCHEMA,
+    A2AORCH_TASK_LINKS_LIST_INPUT_SCHEMA,
+    A2AORCH_TASK_REASSIGN_INPUT_SCHEMA,
+    A2AORCH_TASK_SESSIONS_LIST_INPUT_SCHEMA,
+    A2AORCH_TASK_SESSION_GET_INPUT_SCHEMA,
+    A2AORCH_TASK_STATUS_INPUT_SCHEMA,
+    A2AORCH_TASK_UPDATE_INPUT_SCHEMA,
+    hermes_a2aorch_agents_list,
+    hermes_a2aorch_guardian_status,
+    hermes_a2aorch_hitl_inbox,
+    hermes_a2aorch_hitl_respond,
+    hermes_a2aorch_link_create,
+    hermes_a2aorch_link_delete,
+    hermes_a2aorch_project_create,
+    hermes_a2aorch_project_get,
+    hermes_a2aorch_project_tasks_list,
+    hermes_a2aorch_project_update,
+    hermes_a2aorch_projects_list,
+    hermes_a2aorch_session_control,
+    hermes_a2aorch_subscriber_add,
+    hermes_a2aorch_subscriber_remove,
+    hermes_a2aorch_system_status,
+    hermes_a2aorch_task_block,
+    hermes_a2aorch_task_claim,
+    hermes_a2aorch_task_comment_create,
+    hermes_a2aorch_task_create,
+    hermes_a2aorch_task_events,
+    hermes_a2aorch_task_get,
+    hermes_a2aorch_task_input,
+    hermes_a2aorch_task_links_list,
+    hermes_a2aorch_task_reassign,
+    hermes_a2aorch_task_session_get,
+    hermes_a2aorch_task_sessions_list,
+    hermes_a2aorch_task_status,
+    hermes_a2aorch_task_update,
+    hermes_a2aorch_tasks_list,
 )
 
 from .chat_completions import CHAT_COMPLETIONS_INPUT_SCHEMA, hermes_api_chat_completions
-from .kanban_api_docs import (
-    KANBAN_DOCS_MIME_TYPE,
-    kanban_api_docs_resources,
-    hermes_kanban_api_docs_list,
-    hermes_kanban_api_docs_read,
-    read_kanban_api_docs_resource_text,
+from .a2aorch_api_docs import (
+    A2AORCH_DOCS_MIME_TYPE,
+    a2aorch_api_docs_resources,
+    hermes_a2aorch_api_docs_list,
+    hermes_a2aorch_api_docs_read,
+    read_a2aorch_api_docs_resource_text,
 )
 from .config import ToolkitMcpConfig, load_config
 from .discovery import (
@@ -221,7 +237,7 @@ FALLBACK_INPUT_SCHEMA: dict[str, Any] = {
         },
         "docs_resource_consulted": {
             "type": "string",
-            "pattern": "^hermes-docs://(api-server|kanban-api)/.+",
+            "pattern": "^hermes-docs://(api-server|a2aorch-api)/.+",
             "description": "Bundled Hermes API docs resource URI read before attempting fallback.",
         },
         "typed_wrapper_checked": {
@@ -280,12 +296,12 @@ DOCS_READ_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "section": {
             "type": "string",
-            "description": "API docs section slug from hermes_api_docs_list or hermes_kanban_api_docs_list. Defaults to full.",
+            "description": "API docs section slug from hermes_api_docs_list or hermes_a2aorch_api_docs_list. Defaults to full.",
         },
         "uri": {
             "type": "string",
-            "description": "MCP resource URI such as hermes-docs://api-server/post-v1-chat-completions or hermes-docs://kanban-api/get-api-plugins-kanban-board.",
-            "pattern": "^hermes-docs://(api-server|kanban-api)/.+",
+            "description": "MCP resource URI such as hermes-docs://api-server/post-v1-chat-completions or hermes-docs://a2aorch-api/get-api-v1-tasks.",
+            "pattern": "^hermes-docs://(api-server|a2aorch-api)/.+",
         },
     },
 }
@@ -692,16 +708,16 @@ TOOL_SPECS: dict[str, ToolSpec] = {
         hermes_api_docs_read,
         DOCS_READ_INPUT_SCHEMA,
     ),
-    "hermes_kanban_api_docs_list": ToolSpec(
-        _api_docs_metadata("hermes_kanban_api_docs_list", "List Hermes Kanban API docs snapshot sections"),
-        "List bundled Hermes Kanban REST API documentation resources, section slugs, snapshot provenance, and planned wrapper mapping without network refresh.",
-        hermes_kanban_api_docs_list,
+    "hermes_a2aorch_api_docs_list": ToolSpec(
+        _api_docs_metadata("hermes_a2aorch_api_docs_list", "List A2AORCH Registry API docs snapshot sections"),
+        "List bundled A2AORCH registry REST documentation resources, section slugs, snapshot provenance, and wrapper mapping without network refresh.",
+        hermes_a2aorch_api_docs_list,
         DOCS_LIST_INPUT_SCHEMA,
     ),
-    "hermes_kanban_api_docs_read": ToolSpec(
-        _api_docs_metadata("hermes_kanban_api_docs_read", "Read Hermes Kanban API docs snapshot section"),
-        "Read one bundled Hermes Kanban API docs section by slug or hermes-docs://kanban-api/* resource URI without network, API, model, or tool calls.",
-        hermes_kanban_api_docs_read,
+    "hermes_a2aorch_api_docs_read": ToolSpec(
+        _api_docs_metadata("hermes_a2aorch_api_docs_read", "Read A2AORCH Registry API docs snapshot section"),
+        "Read one bundled A2AORCH registry API docs section by slug or hermes-docs://a2aorch-api/* resource URI without network, API, model, or tool calls.",
+        hermes_a2aorch_api_docs_read,
         DOCS_READ_INPUT_SCHEMA,
     ),
     "hermes_api_models_list": ToolSpec(
@@ -810,131 +826,179 @@ TOOL_SPECS: dict[str, ToolSpec] = {
         hermes_api_jobs_run,
         JOBS_RUN_INPUT_SCHEMA,
     ),
-    "hermes_kanban_board_get": ToolSpec(
-        _api_metadata_metadata("hermes_kanban_board_get", "Get Kanban board"),
-        "Typed GET /api/plugins/kanban/board wrapper that reads a Kanban board with optional board slug, tenant, archived filter, limit, and offset, writing redacted receipts.",
-        hermes_kanban_board_get,
-        KANBAN_BOARD_GET_INPUT_SCHEMA,
+    "hermes_a2aorch_projects_list": ToolSpec(
+        _api_metadata_metadata("hermes_a2aorch_projects_list", "List A2AORCH projects"),
+        "Typed GET /api/v1/projects wrapper that lists every a2aorch project the caller is subscribed to, writing redacted receipts.",
+        hermes_a2aorch_projects_list,
+        A2AORCH_PROJECTS_LIST_INPUT_SCHEMA,
     ),
-    "hermes_kanban_boards_list": ToolSpec(
-        _api_metadata_metadata("hermes_kanban_boards_list", "List Kanban boards"),
-        "Typed GET /api/plugins/kanban/boards wrapper that lists every board on disk with metadata, task counts, health, and the active board slug, writing redacted receipts.",
-        hermes_kanban_boards_list,
-        KANBAN_BOARDS_LIST_INPUT_SCHEMA,
+    "hermes_a2aorch_project_get": ToolSpec(
+        _api_metadata_metadata("hermes_a2aorch_project_get", "Get A2AORCH project"),
+        "Typed GET /api/v1/projects/{project_id} wrapper that reads one project's status, directory, pause overlay, and fallback assignees, writing redacted receipts.",
+        hermes_a2aorch_project_get,
+        A2AORCH_PROJECT_GET_INPUT_SCHEMA,
     ),
-    "hermes_kanban_assignees_list": ToolSpec(
-        _api_metadata_metadata("hermes_kanban_assignees_list", "List Kanban assignees"),
-        "Typed GET /api/plugins/kanban/assignees wrapper that lists available assignee profiles with optional board-scoped task counts, writing redacted receipts.",
-        hermes_kanban_assignees_list,
-        KANBAN_ASSIGNEES_LIST_INPUT_SCHEMA,
+    "hermes_a2aorch_project_tasks_list": ToolSpec(
+        _api_metadata_metadata("hermes_a2aorch_project_tasks_list", "List A2AORCH project tasks"),
+        "Typed GET /api/v1/projects/{project_id}/tasks wrapper that lists a project's tasks with status, category, assignee, parent_id, blocked, priority, and archived filters, writing redacted receipts.",
+        hermes_a2aorch_project_tasks_list,
+        A2AORCH_PROJECT_TASKS_LIST_INPUT_SCHEMA,
     ),
-    "hermes_kanban_task_get": ToolSpec(
-        _api_metadata_metadata("hermes_kanban_task_get", "Get Kanban task"),
-        "Typed GET /api/plugins/kanban/tasks/{id} wrapper that reads one Kanban task by id with optional board slug and tenant, writing redacted receipts.",
-        hermes_kanban_task_get,
-        KANBAN_TASK_GET_INPUT_SCHEMA,
+    "hermes_a2aorch_tasks_list": ToolSpec(
+        _api_metadata_metadata("hermes_a2aorch_tasks_list", "List A2AORCH tasks"),
+        "Typed GET /api/v1/tasks wrapper that reads the all-projects board view across every subscribed project, with an include_archived filter, writing redacted receipts.",
+        hermes_a2aorch_tasks_list,
+        A2AORCH_TASKS_LIST_INPUT_SCHEMA,
     ),
-    "hermes_kanban_workers_active": ToolSpec(
-        _api_metadata_metadata("hermes_kanban_workers_active", "List active Kanban workers"),
-        "Typed GET /api/plugins/kanban/workers/active wrapper that lists currently spawned Kanban workers with PID, profile, task id, and heartbeat metadata, writing redacted receipts.",
-        hermes_kanban_workers_active,
-        KANBAN_WORKERS_ACTIVE_INPUT_SCHEMA,
+    "hermes_a2aorch_task_get": ToolSpec(
+        _api_metadata_metadata("hermes_a2aorch_task_get", "Get A2AORCH task"),
+        "Typed GET /api/v1/tasks/{task_id} wrapper that reads one registry task with its comments, events, and links, writing redacted receipts.",
+        hermes_a2aorch_task_get,
+        A2AORCH_TASK_GET_INPUT_SCHEMA,
     ),
-    "hermes_kanban_run_get": ToolSpec(
-        _api_metadata_metadata("hermes_kanban_run_get", "Get Kanban run"),
-        "Typed GET /api/plugins/kanban/runs/{run_id} wrapper that reads single-run detail such as task id, status, started/ended timestamps, exit code, and log path, writing redacted receipts.",
-        hermes_kanban_run_get,
-        KANBAN_RUN_GET_INPUT_SCHEMA,
+    "hermes_a2aorch_task_events": ToolSpec(
+        _api_metadata_metadata("hermes_a2aorch_task_events", "List A2AORCH task events"),
+        "Typed GET /api/v1/tasks/{task_id}/events wrapper that reads a task's audit trail (created, status_change, reassigned, blocked, commented, session_started, escalated), writing redacted receipts.",
+        hermes_a2aorch_task_events,
+        A2AORCH_TASK_EVENTS_INPUT_SCHEMA,
     ),
-    "hermes_kanban_run_inspect": ToolSpec(
-        _api_metadata_metadata("hermes_kanban_run_inspect", "Inspect Kanban run output"),
-        "Typed GET /api/plugins/kanban/runs/{run_id}/inspect wrapper that reads per-run captured output (stdout/stderr preview, redacted), writing redacted receipts. Process control remains unwrapped/denied.",
-        hermes_kanban_run_inspect,
-        KANBAN_RUN_INSPECT_INPUT_SCHEMA,
+    "hermes_a2aorch_task_links_list": ToolSpec(
+        _api_metadata_metadata("hermes_a2aorch_task_links_list", "List A2AORCH task links"),
+        "Typed GET /api/v1/tasks/{task_id}/links wrapper that reads a task's dependency links, writing redacted receipts.",
+        hermes_a2aorch_task_links_list,
+        A2AORCH_TASK_LINKS_LIST_INPUT_SCHEMA,
     ),
-    "hermes_kanban_task_create": ToolSpec(
-        _api_call_metadata("hermes_kanban_task_create", "Create Kanban task"),
-        "Typed POST /api/plugins/kanban/tasks wrapper that creates a Kanban task with title, body, assignee, priority, parents, triage flag, idempotency key, and workspace options, writing redacted receipts.",
-        hermes_kanban_task_create,
-        KANBAN_TASK_CREATE_INPUT_SCHEMA,
+    "hermes_a2aorch_task_session_get": ToolSpec(
+        _api_metadata_metadata("hermes_a2aorch_task_session_get", "Get A2AORCH task session"),
+        "Typed GET /api/v1/tasks/{task_id}/session wrapper that reads a task's A2A session overlay (session_state, context_id, assignee), writing redacted receipts.",
+        hermes_a2aorch_task_session_get,
+        A2AORCH_TASK_SESSION_GET_INPUT_SCHEMA,
     ),
-    "hermes_kanban_task_update": ToolSpec(
-        _api_call_metadata("hermes_kanban_task_update", "Update Kanban task"),
-        "Typed PATCH /api/plugins/kanban/tasks/{id} wrapper that updates status, assignee, priority, title, body, result, or completion summary for one Kanban task, writing redacted receipts.",
-        hermes_kanban_task_update,
-        KANBAN_TASK_UPDATE_INPUT_SCHEMA,
+    "hermes_a2aorch_task_sessions_list": ToolSpec(
+        _api_metadata_metadata("hermes_a2aorch_task_sessions_list", "List A2AORCH task sessions"),
+        "Typed GET /api/v1/tasks/{task_id}/sessions wrapper that reads the read-only session-oversight index for a task across profile state.dbs, writing redacted receipts.",
+        hermes_a2aorch_task_sessions_list,
+        A2AORCH_TASK_SESSIONS_LIST_INPUT_SCHEMA,
     ),
-    "hermes_kanban_tasks_bulk_update": ToolSpec(
-        _api_call_metadata("hermes_kanban_tasks_bulk_update", "Bulk update Kanban tasks"),
-        "Typed POST /api/plugins/kanban/tasks/bulk wrapper that applies the same status, assignee, priority, archive, or completion patch to every id in the list, reporting per-id outcomes without aborting siblings, writing redacted receipts.",
-        hermes_kanban_tasks_bulk_update,
-        KANBAN_TASKS_BULK_UPDATE_INPUT_SCHEMA,
+    "hermes_a2aorch_agents_list": ToolSpec(
+        _api_metadata_metadata("hermes_a2aorch_agents_list", "List A2AORCH agents"),
+        "Typed GET /api/v1/agents wrapper that lists registered principals — the assignee and subscriber vocabulary — writing redacted receipts.",
+        hermes_a2aorch_agents_list,
+        A2AORCH_AGENTS_LIST_INPUT_SCHEMA,
     ),
-    "hermes_kanban_task_comment_create": ToolSpec(
-        _api_call_metadata("hermes_kanban_task_comment_create", "Create Kanban task comment"),
-        "Typed POST /api/plugins/kanban/tasks/{id}/comments wrapper that appends a comment to a Kanban task, using JSON body for the comment text and optional board query param, writing redacted receipts.",
-        hermes_kanban_task_comment_create,
-        KANBAN_TASK_COMMENT_CREATE_INPUT_SCHEMA,
+    "hermes_a2aorch_hitl_inbox": ToolSpec(
+        _api_metadata_metadata("hermes_a2aorch_hitl_inbox", "List A2AORCH HITL obligations"),
+        "Typed GET /api/v1/hitl wrapper that reads the human-in-the-loop obligation inbox with a state filter (pending, expired, answered, all), writing redacted receipts.",
+        hermes_a2aorch_hitl_inbox,
+        A2AORCH_HITL_INBOX_INPUT_SCHEMA,
     ),
-    "hermes_kanban_link_create": ToolSpec(
-        _api_call_metadata("hermes_kanban_link_create", "Create Kanban task link"),
-        "Typed POST /api/plugins/kanban/links wrapper that adds a dependency (parent_id -> child_id), using JSON body for the relationship and optional board query param, writing redacted receipts.",
-        hermes_kanban_link_create,
-        KANBAN_LINK_CREATE_INPUT_SCHEMA,
+    "hermes_a2aorch_system_status": ToolSpec(
+        _api_metadata_metadata("hermes_a2aorch_system_status", "Get A2AORCH system status"),
+        "Typed GET /api/v1/system/status wrapper that reads registry system state including the system-wide pause overlay, writing redacted receipts.",
+        hermes_a2aorch_system_status,
+        A2AORCH_SYSTEM_STATUS_INPUT_SCHEMA,
     ),
-    "hermes_kanban_link_delete": ToolSpec(
-        _api_call_metadata("hermes_kanban_link_delete", "Delete Kanban task link"),
-        "Typed DELETE /api/plugins/kanban/links wrapper that removes a dependency identified by parent_id and child_id query params, with optional board query param, writing redacted receipts.",
-        hermes_kanban_link_delete,
-        KANBAN_LINK_DELETE_INPUT_SCHEMA,
+    "hermes_a2aorch_guardian_status": ToolSpec(
+        _api_metadata_metadata("hermes_a2aorch_guardian_status", "Get A2AORCH guardian status"),
+        "Typed GET /api/v1/system/guardian wrapper that reads the cron guardian heartbeat (status, health, observe_only, interval_s, drift), writing redacted receipts.",
+        hermes_a2aorch_guardian_status,
+        A2AORCH_GUARDIAN_STATUS_INPUT_SCHEMA,
     ),
-    "hermes_kanban_task_specify": ToolSpec(
-        _api_call_metadata("hermes_kanban_task_specify", "Specify Kanban task", model_spend=True),
-        "Typed POST /api/plugins/kanban/tasks/{id}/specify wrapper that runs the triage specifier auxiliary LLM to flesh out a triage task and promote it to todo, writing redacted receipts.",
-        hermes_kanban_task_specify,
-        KANBAN_TASK_SPECIFY_INPUT_SCHEMA,
+    "hermes_a2aorch_project_create": ToolSpec(
+        _api_call_metadata("hermes_a2aorch_project_create", "Create A2AORCH project"),
+        "Typed POST /api/v1/projects wrapper that creates a registry project with a name, optional explicit id, description, and directory, writing redacted receipts.",
+        hermes_a2aorch_project_create,
+        A2AORCH_PROJECT_CREATE_INPUT_SCHEMA,
     ),
-    "hermes_kanban_task_decompose": ToolSpec(
-        _api_call_metadata("hermes_kanban_task_decompose", "Decompose Kanban task", model_spend=True),
-        "Typed POST /api/plugins/kanban/tasks/{id}/decompose wrapper that runs the kanban decomposer auxiliary LLM to produce a task graph, create children, link the root, and flip triage to todo, writing redacted receipts.",
-        hermes_kanban_task_decompose,
-        KANBAN_TASK_DECOMPOSE_INPUT_SCHEMA,
+    "hermes_a2aorch_project_update": ToolSpec(
+        _api_call_metadata("hermes_a2aorch_project_update", "Update A2AORCH project"),
+        "Typed PATCH /api/v1/projects/{project_id} wrapper that updates name, status, description, directory, or linked Hermes project, writing redacted receipts.",
+        hermes_a2aorch_project_update,
+        A2AORCH_PROJECT_UPDATE_INPUT_SCHEMA,
     ),
-    "hermes_kanban_profiles_list": ToolSpec(
-        _api_metadata_metadata("hermes_kanban_profiles_list", "List Kanban profiles"),
-        "Typed GET /api/plugins/kanban/profiles wrapper that lists installed Hermes profiles with descriptions, writing redacted receipts.",
-        hermes_kanban_profiles_list,
-        KANBAN_PROFILES_LIST_INPUT_SCHEMA,
+    "hermes_a2aorch_subscriber_add": ToolSpec(
+        _api_call_metadata("hermes_a2aorch_subscriber_add", "Add A2AORCH project subscriber"),
+        "Typed POST /api/v1/projects/{project_id}/subscribers wrapper that grants a principal visibility of a project, writing redacted receipts.",
+        hermes_a2aorch_subscriber_add,
+        A2AORCH_SUBSCRIBER_ADD_INPUT_SCHEMA,
     ),
-    "hermes_kanban_profile_update": ToolSpec(
-        _api_call_metadata("hermes_kanban_profile_update", "Update Kanban profile description"),
-        "Typed PATCH /api/plugins/kanban/profiles/{name} wrapper that sets or clears a profile's user-authored description, writing redacted receipts.",
-        hermes_kanban_profile_update,
-        KANBAN_PROFILE_UPDATE_INPUT_SCHEMA,
+    "hermes_a2aorch_subscriber_remove": ToolSpec(
+        _api_call_metadata("hermes_a2aorch_subscriber_remove", "Remove A2AORCH project subscriber"),
+        "Typed DELETE /api/v1/projects/{project_id}/subscribers/{target} wrapper that revokes a principal's visibility of a project, writing redacted receipts.",
+        hermes_a2aorch_subscriber_remove,
+        A2AORCH_SUBSCRIBER_REMOVE_INPUT_SCHEMA,
     ),
-    "hermes_kanban_orchestration_get": ToolSpec(
-        _api_metadata_metadata("hermes_kanban_orchestration_get", "Get Kanban orchestration settings"),
-        "Typed GET /api/plugins/kanban/orchestration wrapper that reads kanban orchestration settings and resolved effective values, writing redacted receipts.",
-        hermes_kanban_orchestration_get,
-        KANBAN_ORCHESTRATION_GET_INPUT_SCHEMA,
+    "hermes_a2aorch_task_create": ToolSpec(
+        _api_call_metadata("hermes_a2aorch_task_create", "Create A2AORCH task"),
+        "Typed POST /api/v1/projects/{project_id}/tasks wrapper that creates a registry task with title, body, parent, priority, assignee, and idempotency keys, writing redacted receipts.",
+        hermes_a2aorch_task_create,
+        A2AORCH_TASK_CREATE_INPUT_SCHEMA,
     ),
-    "hermes_kanban_orchestration_update": ToolSpec(
-        _api_call_metadata("hermes_kanban_orchestration_update", "Update Kanban orchestration settings"),
-        "Typed PUT /api/plugins/kanban/orchestration wrapper that updates orchestrator_profile, default_assignee, or auto_decompose in config.yaml, writing redacted receipts.",
-        hermes_kanban_orchestration_update,
-        KANBAN_ORCHESTRATION_UPDATE_INPUT_SCHEMA,
+    "hermes_a2aorch_task_update": ToolSpec(
+        _api_call_metadata("hermes_a2aorch_task_update", "Update A2AORCH task"),
+        "Typed PATCH /api/v1/tasks/{task_id} wrapper that updates title, body, priority, or parent only — status is never a PATCH field — writing redacted receipts.",
+        hermes_a2aorch_task_update,
+        A2AORCH_TASK_UPDATE_INPUT_SCHEMA,
     ),
-    "hermes_kanban_dispatch_nudge": ToolSpec(
-        _api_call_metadata("hermes_kanban_dispatch_nudge", "Nudge Kanban dispatcher"),
-        "Typed POST /api/plugins/kanban/dispatch wrapper that nudges the kanban dispatcher to skip the 60 s wait, with optional max, dry_run, board, and tenant query params, writing redacted receipts.",
-        hermes_kanban_dispatch_nudge,
-        KANBAN_DISPATCH_NUDGE_INPUT_SCHEMA,
+    "hermes_a2aorch_task_status": ToolSpec(
+        _api_call_metadata("hermes_a2aorch_task_status", "Set A2AORCH task status"),
+        "Typed POST /api/v1/tasks/{task_id}/status wrapper that performs the only legal status transition, refusing illegal edges with 409, writing redacted receipts.",
+        hermes_a2aorch_task_status,
+        A2AORCH_TASK_STATUS_INPUT_SCHEMA,
     ),
-    "hermes_kanban_config_get": ToolSpec(
-        _api_metadata_metadata("hermes_kanban_config_get", "Get Kanban dashboard config"),
-        "Typed GET /api/plugins/kanban/config wrapper that reads dashboard.kanban preferences from config.yaml, writing redacted receipts.",
-        hermes_kanban_config_get,
-        KANBAN_CONFIG_GET_INPUT_SCHEMA,
+    "hermes_a2aorch_task_claim": ToolSpec(
+        _api_call_metadata("hermes_a2aorch_task_claim", "Claim A2AORCH task"),
+        "Typed POST /api/v1/tasks/{task_id}/claim wrapper that moves todo to in_progress and assigns the task to the caller, one winner only, writing redacted receipts.",
+        hermes_a2aorch_task_claim,
+        A2AORCH_TASK_CLAIM_INPUT_SCHEMA,
+    ),
+    "hermes_a2aorch_task_reassign": ToolSpec(
+        _api_call_metadata("hermes_a2aorch_task_reassign", "Reassign A2AORCH task"),
+        "Typed POST /api/v1/tasks/{task_id}/reassign wrapper that hands a task to another subscriber and runs the A2A hand-off synchronously, writing redacted receipts.",
+        hermes_a2aorch_task_reassign,
+        A2AORCH_TASK_REASSIGN_INPUT_SCHEMA,
+    ),
+    "hermes_a2aorch_link_create": ToolSpec(
+        _api_call_metadata("hermes_a2aorch_link_create", "Create A2AORCH task link"),
+        "Typed POST /api/v1/tasks/{task_id}/links wrapper that adds a dependency link to a target task with an optional label, writing redacted receipts.",
+        hermes_a2aorch_link_create,
+        A2AORCH_LINK_CREATE_INPUT_SCHEMA,
+    ),
+    "hermes_a2aorch_link_delete": ToolSpec(
+        _api_call_metadata("hermes_a2aorch_link_delete", "Delete A2AORCH task link"),
+        "Typed DELETE /api/v1/tasks/{task_id}/links/{link_id} wrapper that removes one dependency link by integer link id, writing redacted receipts.",
+        hermes_a2aorch_link_delete,
+        A2AORCH_LINK_DELETE_INPUT_SCHEMA,
+    ),
+    "hermes_a2aorch_task_block": ToolSpec(
+        _api_call_metadata("hermes_a2aorch_task_block", "Block A2AORCH task"),
+        "Typed POST /api/v1/tasks/{task_id}/block wrapper that applies the blocked overlay with blockers and a reason — never a status change — writing redacted receipts.",
+        hermes_a2aorch_task_block,
+        A2AORCH_TASK_BLOCK_INPUT_SCHEMA,
+    ),
+    "hermes_a2aorch_task_comment_create": ToolSpec(
+        _api_call_metadata("hermes_a2aorch_task_comment_create", "Create A2AORCH task comment"),
+        "Typed POST /api/v1/tasks/{task_id}/comments wrapper that appends a comment using a JSON body, writing redacted receipts.",
+        hermes_a2aorch_task_comment_create,
+        A2AORCH_TASK_COMMENT_CREATE_INPUT_SCHEMA,
+    ),
+    "hermes_a2aorch_task_input": ToolSpec(
+        _api_call_metadata("hermes_a2aorch_task_input", "Request A2AORCH task input"),
+        "Typed POST /api/v1/tasks/{task_id}/input wrapper that moves a task into input_required and optionally opens a HITL obligation with question, kind, and choices, writing redacted receipts.",
+        hermes_a2aorch_task_input,
+        A2AORCH_TASK_INPUT_INPUT_SCHEMA,
+    ),
+    "hermes_a2aorch_hitl_respond": ToolSpec(
+        _api_call_metadata("hermes_a2aorch_hitl_respond", "Answer A2AORCH HITL obligation"),
+        "Typed POST /api/v1/hitl/{request_id}/respond wrapper that answers a pending human-in-the-loop obligation atomically, writing redacted receipts.",
+        hermes_a2aorch_hitl_respond,
+        A2AORCH_HITL_RESPOND_INPUT_SCHEMA,
+    ),
+    "hermes_a2aorch_session_control": ToolSpec(
+        _api_call_metadata("hermes_a2aorch_session_control", "Control A2AORCH task session"),
+        "Typed POST /api/v1/tasks/{task_id}/session wrapper that initiates, resumes, or stops a task's A2A session, reporting dispatched=false for an already-underway no-op, writing redacted receipts.",
+        hermes_a2aorch_session_control,
+        A2AORCH_SESSION_CONTROL_INPUT_SCHEMA,
     ),
     "hermes_api_runs_start": ToolSpec(
         _api_call_metadata("hermes_api_runs_start", "Start Hermes run", model_spend=True, agent_tool_execution=True),
@@ -1062,7 +1126,7 @@ def build_resource_definitions(config: ToolkitMcpConfig) -> list[types.Resource]
                 },
             )
         )
-    for resource in kanban_api_docs_resources(config):
+    for resource in a2aorch_api_docs_resources(config):
         resources.append(
             types.Resource(
                 uri=resource["uri"],
@@ -1073,7 +1137,7 @@ def build_resource_definitions(config: ToolkitMcpConfig) -> list[types.Resource]
                 size=resource["size_bytes"],
                 _meta={
                     "hermes.docs": {
-                        "source_url": "https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban#rest-surface",
+                        "source_url": "https://github.com/Elliot-Construct/a2aorch/blob/main/docs/task-registry.md",
                         "snapshot_kind": "bundled_local_markdown",
                         "normal_tool_calls_refresh_network": False,
                         "wrapper_mapping": resource["wrapper_mapping"],
@@ -1313,9 +1377,9 @@ def create_mcp_server(config: ToolkitMcpConfig) -> Server:
     @server.read_resource()
     async def read_resource(uri: Any) -> list[ReadResourceContents]:
         uri_str = str(uri)
-        if uri_str.startswith("hermes-docs://kanban-api/"):
-            text = read_kanban_api_docs_resource_text(uri_str, config)
-            return [ReadResourceContents(text, mime_type=KANBAN_DOCS_MIME_TYPE)]
+        if uri_str.startswith("hermes-docs://a2aorch-api/"):
+            text = read_a2aorch_api_docs_resource_text(uri_str, config)
+            return [ReadResourceContents(text, mime_type=A2AORCH_DOCS_MIME_TYPE)]
         text = read_api_docs_resource_text(uri_str, config)
         return [ReadResourceContents(text, mime_type=API_DOCS_MIME_TYPE)]
 

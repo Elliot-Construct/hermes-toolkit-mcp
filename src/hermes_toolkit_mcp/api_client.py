@@ -10,9 +10,9 @@ from typing import Any, Pattern
 import httpx
 
 from .api_docs import WRAPPER_MAPPING
+from .a2aorch_api_docs import A2AORCH_WRAPPER_MAPPING
 from .artifacts import ArtifactWriter
 from .config import ToolkitMcpConfig
-from .kanban_api_docs import KANBAN_WRAPPER_MAPPING
 from .policy import PolicyTier, coerce_policy_tier, tier_allows
 from .redaction import redact_text
 
@@ -82,8 +82,8 @@ def _risk_flags(method: str, endpoint: str, min_tier: PolicyTier) -> tuple[str, 
         flags.append("agent_run")
     if endpoint.startswith("/api/jobs"):
         flags.append("scheduler")
-    if endpoint.startswith("/api/plugins/kanban"):
-        flags.append("kanban_plugin")
+    if endpoint.startswith("/api/v1"):
+        flags.append("a2aorch_registry")
     if endpoint.startswith("/health"):
         flags.append("health")
     return tuple(dict.fromkeys(flags or ["unknown"]))
@@ -132,31 +132,42 @@ EXPLICITLY_DENIED_ROUTES: tuple[HermesApiRoute, ...] = (
     _denied_route("GET", "/api/sessions/{id}/messages", reason="session transcript read has no typed wrapper"),
     _denied_route("POST", "/api/sessions/{id}/chat", reason="synchronous session chat has no typed wrapper"),
     _denied_route("POST", "/api/sessions/{id}/chat/stream", reason="session chat stream has no typed wrapper"),
-    # Kanban WebSocket events: stdio MCP cannot safely proxy a streaming WebSocket.
-    _denied_route("WS", "/api/plugins/kanban/events", reason="WebSocket events stream has no typed stdio wrapper"),
-    # Kanban worker process control: terminate can disrupt in-flight agent runs.
+    # a2aorch: bearer-token minting is a credential operation, never wrapped —
+    # a token in an artifact receipt would be a secret in a receipt.
+    _denied_route("POST", "/api/v1/agents/register", reason="bearer-token minting has no typed wrapper"),
+    # a2aorch: a bridge send blocks for the full bridge timeout and speaks
+    # directly to a peer outside the task's audit trail.
     _denied_route(
         "POST",
-        "/api/plugins/kanban/runs/{run_id}/terminate",
-        reason="worker run termination has no typed wrapper and can disrupt agent runs",
+        "/api/v1/dm",
+        reason="direct peer messaging has no typed wrapper and can block for the full bridge timeout",
     ),
-    # Kanban inspect (per-run stderr) is not exposed until a redaction-safe wrapper exists.
+    # a2aorch: per-session transcripts are not exposed until a redaction-safe
+    # wrapper exists (parity with the retired kanban inspect denial).
     _denied_route(
         "GET",
-        "/api/plugins/kanban/inspect",
-        reason="per-worker stderr inspection has no typed wrapper and may leak sensitive logs",
+        "/api/v1/tasks/{task_id}/sessions/{profile}/{session_id}/messages",
+        reason="session transcript read has no typed wrapper and may leak sensitive content",
     ),
-    # File upload / attachments: no safe bounded wrapper.
+    # a2aorch: registry log read is not exposed until a redaction-safe wrapper exists.
+    _denied_route("GET", "/api/v1/system/logs", reason="registry log read has no typed wrapper and may leak sensitive logs"),
+    # a2aorch: the system kill switch and the reconciler are operator-only.
     _denied_route(
         "POST",
-        "/api/plugins/kanban/attachments",
-        reason="file upload has no typed wrapper and may accept arbitrary binary payloads",
+        "/api/v1/system/pause",
+        reason="system-wide pause halts every registry project and has no typed wrapper",
+    ),
+    _denied_route("POST", "/api/v1/system/resume", reason="system-wide resume has no typed wrapper"),
+    _denied_route(
+        "POST",
+        "/api/v1/system/reconcile",
+        reason="manual reconcile sweep can rewrite session state and has no typed wrapper",
     ),
 )
 
 ALLOWED_ROUTES: tuple[HermesApiRoute, ...] = tuple(
     _route_from_mapping(dict(mapping))
-    for mapping in (*WRAPPER_MAPPING, *KANBAN_WRAPPER_MAPPING)
+    for mapping in (*WRAPPER_MAPPING, *A2AORCH_WRAPPER_MAPPING)
     if mapping.get("status") == "implemented_typed_wrapper"
 )
 API_ROUTE_TABLE: tuple[HermesApiRoute, ...] = (*EXPLICITLY_DENIED_ROUTES, *ALLOWED_ROUTES)
@@ -234,12 +245,10 @@ def _route_path(path: str) -> str:
 
 
 class HermesApiClient:
-    """Route-table-gated httpx client for typed Hermes API and dashboard plugin calls."""
+    """Route-table-gated httpx client for typed Hermes API and a2aorch registry calls."""
 
     def __init__(self, config: ToolkitMcpConfig) -> None:
         self.config = config
-        self._dashboard_cookies: dict[str, str] | None = None
-        self._dashboard_login_attempted: bool = False
 
     def request(
         self,
@@ -274,11 +283,6 @@ class HermesApiClient:
         try:
             with self._http_client_for_route(route) as client:
                 response = client.request(method.upper(), url, content=body, headers=request_headers)
-                if response.status_code == 401 and self._is_dashboard_route(route) and self._can_dashboard_auth():
-                    self._write_response_receipt(run, route, response)
-                    response = self._retry_with_dashboard_login(
-                        client, method.upper(), url, content=body, headers=request_headers
-                    )
         except httpx.TimeoutException as exc:
             raise HermesApiClientError("TIMEOUT", "Hermes API request timed out") from exc
         except httpx.HTTPError as exc:
@@ -347,106 +351,42 @@ class HermesApiClient:
         for key, value in supplied_headers.items():
             canonical = "-".join(part.capitalize() for part in key.split("-"))
             headers[canonical] = value
-        _, key_env = self._origin_for_path(route.path_pattern)
-        api_key = os.environ.get(key_env) if key_env else None
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+        credential = self._credential_for_path(route.path_pattern)
+        if credential:
+            headers["Authorization"] = f"Bearer {credential}"
         return headers
 
     def _http_client_for_route(self, route: HermesApiRoute) -> httpx.Client:
-        timeout = httpx.Timeout(float(self.config.hermes.api.request_timeout_seconds))
-        if not self._is_dashboard_route(route):
-            return httpx.Client(timeout=timeout, follow_redirects=False)
-        if not self.config.hermes.api.is_dashboard_auth_configured():
-            return httpx.Client(timeout=timeout, follow_redirects=False)
-        return httpx.Client(
-            timeout=timeout,
-            follow_redirects=False,
-            cookies=self._ensure_dashboard_cookies(),
-        )
+        if self._is_a2aorch_route(route):
+            # Reassign and session control ride the A2A bridge synchronously and
+            # can legitimately block for minutes; the connect phase stays short
+            # so an unreachable gateway still fails fast.
+            budget = float(self.config.a2aorch.request_timeout_seconds)
+            timeout = httpx.Timeout(budget, connect=min(budget, 15.0))
+        else:
+            timeout = httpx.Timeout(float(self.config.hermes.api.request_timeout_seconds))
+        return httpx.Client(timeout=timeout, follow_redirects=False)
 
-    def _is_dashboard_route(self, route: HermesApiRoute) -> bool:
-        return route.path_pattern.startswith("/api/plugins/kanban")
-
-    def _can_dashboard_auth(self) -> bool:
-        return self.config.hermes.api.is_dashboard_auth_configured()
-
-    def _ensure_dashboard_cookies(self) -> dict[str, str]:
-        if self._dashboard_cookies is None:
-            self._dashboard_login()
-        return self._dashboard_cookies or {}
-
-    def _retry_with_dashboard_login(
-        self,
-        client: httpx.Client,
-        method: str,
-        url: str,
-        *,
-        content: bytes | None,
-        headers: dict[str, str],
-    ) -> httpx.Response:
-        self._dashboard_login()
-        client.cookies = httpx.Cookies(self._dashboard_cookies or {})
-        return client.request(method, url, content=content, headers=headers)
-
-    def _dashboard_login(self) -> None:
-        provider = self.config.hermes.api.dashboard_auth_provider
-        username = self.config.hermes.api.dashboard_auth_username
-        password = self.config.hermes.api.resolve_dashboard_password()
-        if not provider or not username:
-            raise HermesApiClientError(
-                "DASHBOARD_AUTH_CONFIG_MISSING", "dashboard_auth_provider and dashboard_auth_username are required"
-            )
-        if not password:
-            raise HermesApiClientError(
-                "DASHBOARD_AUTH_PASSWORD_MISSING",
-                f"dashboard password is missing (env={self.config.hermes.api.dashboard_auth_password_env})",
-            )
-        login_url = httpx.URL(self.config.hermes.api.dashboard_base_url).join("/auth/password-login")
-        payload = {
-            "provider": provider,
-            "username": username,
-            "password": password,
-            "next": "",
-        }
-        try:
-            with httpx.Client(
-                timeout=httpx.Timeout(float(self.config.hermes.api.request_timeout_seconds)),
-                follow_redirects=False,
-            ) as login_client:
-                login_response = login_client.post(login_url, json=payload)
-        except httpx.TimeoutException as exc:
-            raise HermesApiClientError("DASHBOARD_LOGIN_TIMEOUT", "dashboard password-login timed out") from exc
-        except httpx.HTTPError as exc:
-            raise HermesApiClientError(
-                "DASHBOARD_LOGIN_HTTP_ERROR", f"dashboard password-login failed: {type(exc).__name__}"
-            ) from exc
-
-        if login_response.status_code == 401:
-            raise HermesApiClientError("DASHBOARD_AUTH_FAILED", "invalid dashboard credentials")
-        if login_response.status_code == 429:
-            raise HermesApiClientError("DASHBOARD_LOGIN_RATE_LIMITED", "dashboard password-login rate limited")
-        if login_response.status_code >= 400:
-            raise HermesApiClientError(
-                "DASHBOARD_LOGIN_FAILED",
-                f"dashboard password-login returned HTTP {login_response.status_code}",
-            )
-        try:
-            decoded = login_response.json()
-        except json.JSONDecodeError as exc:
-            raise HermesApiClientError("DASHBOARD_LOGIN_INVALID_RESPONSE", "dashboard password-login returned non-JSON") from exc
-        if not isinstance(decoded, dict) or not decoded.get("ok"):
-            raise HermesApiClientError("DASHBOARD_LOGIN_FAILED", "dashboard password-login did not succeed")
-        self._dashboard_cookies = {cookie.name: cookie.value for cookie in login_client.cookies.jar}
-        self._dashboard_login_attempted = True
-        if not self._dashboard_cookies:
-            raise HermesApiClientError("DASHBOARD_LOGIN_NO_COOKIES", "dashboard password-login did not set session cookies")
+    def _is_a2aorch_route(self, route: HermesApiRoute) -> bool:
+        return route.path_pattern.startswith("/api/v1")
 
     def _origin_for_path(self, path: str) -> tuple[str, str | None]:
         normalized = path if path.startswith("/") else f"/{path}"
-        if normalized.startswith("/api/plugins/kanban"):
-            return (self.config.hermes.api.dashboard_base_url, self.config.hermes.api.dashboard_api_key_env)
+        if normalized.startswith("/api/v1"):
+            return (self.config.a2aorch.base_url, self.config.a2aorch.token_env)
         return (self.config.hermes.api.base_url, self.config.hermes.api.api_key_env)
+
+    def _credential_for_path(self, path: str) -> str | None:
+        """Resolved bearer credential for the origin serving this path.
+
+        The a2aorch gateway accepts a token from its env var or from the config
+        file (env wins); the Hermes API surface only ever reads its env var.
+        """
+        normalized = path if path.startswith("/") else f"/{path}"
+        if normalized.startswith("/api/v1"):
+            return self.config.a2aorch.resolve_token()
+        _, key_env = self._origin_for_path(normalized)
+        return os.environ.get(key_env) if key_env else None
 
     def _write_request_receipt(
         self,
@@ -474,19 +414,13 @@ class HermesApiClient:
                     "method": route.method,
                     "path": path,
                     "url_origin": str(parsed_url.copy_with(path="/", query=None, fragment=None)),
-                    "api_surface": "dashboard" if route.path_pattern.startswith("/api/plugins/kanban") else "api",
+                    "api_surface": "a2aorch" if route.path_pattern.startswith("/api/v1") else "api",
                 },
                 "auth": {
                     "api_key_env": key_env,
-                    "api_key_env_present": bool(key_env and os.environ.get(key_env)),
-                    "dashboard_auth_provider": self.config.hermes.api.dashboard_auth_provider,
-                    "dashboard_auth_username_configured": bool(self.config.hermes.api.dashboard_auth_username),
-                    "dashboard_pw_present": (
-                        self.config.hermes.api.dashboard_auth_password is not None
-                        or (
-                            self.config.hermes.api.dashboard_auth_password_env is not None
-                            and os.environ.get(self.config.hermes.api.dashboard_auth_password_env) is not None
-                        )
+                    "api_key_env_present": bool(self._credential_for_path(route.path_pattern)),
+                    "credential_source": (
+                        "a2aorch_registry_token" if route.path_pattern.startswith("/api/v1") else "hermes_api_key"
                     ),
                 },
                 "headers": {

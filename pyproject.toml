@@ -32,9 +32,9 @@ dev = [
 hermes-toolkit-mcp = "hermes_toolkit_mcp.cli:main"
 
 [project.urls]
-Repository = "https://github.com/hermegeddon/hermes-toolkit-mcp"
-Issues = "https://github.com/hermegeddon/hermes-toolkit-mcp/issues"
-Security = "https://github.com/hermegeddon/hermes-toolkit-mcp/security"
+Repository = "https://github.com/Elliot-Construct/hermes-toolkit-mcp"
+Issues = "https://github.com/Elliot-Construct/hermes-toolkit-mcp/issues"
+Security = "https://github.com/Elliot-Construct/hermes-toolkit-mcp/security"
 
 [build-system]
 requires = ["hatchling"]

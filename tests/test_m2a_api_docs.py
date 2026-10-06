@@ -14,7 +14,7 @@ from hermes_toolkit_mcp.api_docs import (
 )
 from hermes_toolkit_mcp.config import ToolkitMcpConfig
 from hermes_toolkit_mcp.discovery import DiscoveryError
-from hermes_toolkit_mcp.kanban_api_docs import kanban_api_docs_resources
+from hermes_toolkit_mcp.a2aorch_api_docs import a2aorch_api_docs_resources
 from hermes_toolkit_mcp.server import build_resource_definitions, build_tool_definitions, execute_tool
 
 
@@ -104,11 +104,11 @@ def test_mcp_resource_inventory_matches_docs_read_sections(tmp_path: Path) -> No
     resource_defs = build_resource_definitions(config)
     resource_uris = {str(resource.uri) for resource in resource_defs}
     docs_uris = {resource["uri"] for resource in api_docs_resources(config)}
-    kanban_uris = {resource["uri"] for resource in kanban_api_docs_resources(config)}
+    a2aorch_uris = {resource["uri"] for resource in a2aorch_api_docs_resources(config)}
 
-    assert docs_uris | kanban_uris == resource_uris
+    assert docs_uris | a2aorch_uris == resource_uris
     assert "hermes-docs://api-server/get-v1-models" in resource_uris
-    assert "hermes-docs://kanban-api/full" in resource_uris
+    assert "hermes-docs://a2aorch-api/full" in resource_uris
 
     text = read_api_docs_resource_text("hermes-docs://api-server/get-v1-models", config)
     assert text.startswith("### GET /v1/models")

@@ -23,8 +23,9 @@ def _config(
     tmp_path: Path,
     *,
     api_base_url: str,
-    dashboard_base_url: str = "http://127.0.0.1:0",
+    a2aorch_base_url: str = "http://127.0.0.1:1",
     api_key_env: str = "HERMES_TOOLKIT_TEST_API_KEY",
+    a2aorch_token_env: str = "A2AORCH_TOKEN",
     policy_mode: str = "api_metadata",
 ) -> ToolkitMcpConfig:
     home = tmp_path / "home"
@@ -39,12 +40,13 @@ def _config(
                 "api": {
                     "base_url": api_base_url,
                     "api_key_env": api_key_env,
-                    "dashboard_base_url": dashboard_base_url,
-                    "dashboard_api_key_env": None,
                     "request_timeout_seconds": 3,
-                    "dashboard_auth_username": None,
-                    "dashboard_auth_password_env": None,
                 },
+            },
+            "a2aorch": {
+                "base_url": a2aorch_base_url,
+                "token_env": a2aorch_token_env,
+                "request_timeout_seconds": 3,
             },
             "toolkit": {"root": str(toolkit)},
             "artifacts": {"root": str(tmp_path / "artifacts")},
@@ -55,6 +57,18 @@ def _config(
             },
         }
     )
+
+
+# The 7 a2aorch routes that have no safe typed wrapper: fail-closed by contract.
+DENIED_A2AORCH_ROUTES: tuple[tuple[str, str], ...] = (
+    ("POST", "/api/v1/agents/register"),
+    ("POST", "/api/v1/dm"),
+    ("GET", "/api/v1/tasks/ACME-12/sessions/alfred/session_1/messages"),
+    ("GET", "/api/v1/system/logs"),
+    ("POST", "/api/v1/system/pause"),
+    ("POST", "/api/v1/system/resume"),
+    ("POST", "/api/v1/system/reconcile"),
+)
 
 
 class _JsonHandler(BaseHTTPRequestHandler):
@@ -160,152 +174,110 @@ def test_route_table_denies_unknown_v1_and_requires_typed_wrapper() -> None:
     assert explicit_denial.value.code == "EXPLICITLY_DENIED"
 
 
-def test_kanban_routes_accepted_at_correct_tiers_and_unwrapped_denied() -> None:
-    board = authorize_api_route(
+def test_a2aorch_routes_accepted_at_correct_tiers_and_unwrapped_denied() -> None:
+    tasks = authorize_api_route(
         "GET",
-        "/api/plugins/kanban/board",
+        "/api/v1/tasks",
         configured_tier=PolicyTier.API_METADATA,
-        typed_wrapper_name="hermes_kanban_board_get",
+        typed_wrapper_name="hermes_a2aorch_tasks_list",
     )
-    assert board.typed_wrapper_name == "hermes_kanban_board_get"
-    assert "metadata" in board.risk_flags
-    assert "kanban_plugin" in board.risk_flags
+    assert tasks.typed_wrapper_name == "hermes_a2aorch_tasks_list"
+    assert "metadata" in tasks.risk_flags
+    assert "a2aorch_registry" in tasks.risk_flags
+
+    project = authorize_api_route(
+        "GET",
+        "/api/v1/projects/ACME",
+        configured_tier=PolicyTier.API_METADATA,
+        typed_wrapper_name="hermes_a2aorch_project_get",
+    )
+    assert project.typed_wrapper_name == "hermes_a2aorch_project_get"
+    assert "metadata" in project.risk_flags
+    assert "a2aorch_registry" in project.risk_flags
 
     create = authorize_api_route(
         "POST",
-        "/api/plugins/kanban/tasks",
+        "/api/v1/projects",
         configured_tier=PolicyTier.API_CALL,
-        typed_wrapper_name="hermes_kanban_task_create",
+        typed_wrapper_name="hermes_a2aorch_project_create",
     )
-    assert create.typed_wrapper_name == "hermes_kanban_task_create"
+    assert create.typed_wrapper_name == "hermes_a2aorch_project_create"
     assert "state_changing" in create.risk_flags
-    assert "kanban_plugin" in create.risk_flags
-
-    workers = authorize_api_route(
-        "GET",
-        "/api/plugins/kanban/workers/active",
-        configured_tier=PolicyTier.API_METADATA,
-        typed_wrapper_name="hermes_kanban_workers_active",
-    )
-    assert workers.typed_wrapper_name == "hermes_kanban_workers_active"
-    assert "metadata" in workers.risk_flags
-    assert "kanban_plugin" in workers.risk_flags
-
-    run = authorize_api_route(
-        "GET",
-        "/api/plugins/kanban/runs/741",
-        configured_tier=PolicyTier.API_METADATA,
-        typed_wrapper_name="hermes_kanban_run_get",
-    )
-    assert run.typed_wrapper_name == "hermes_kanban_run_get"
-
-    run_inspect = authorize_api_route(
-        "GET",
-        "/api/plugins/kanban/runs/741/inspect",
-        configured_tier=PolicyTier.API_METADATA,
-        typed_wrapper_name="hermes_kanban_run_inspect",
-    )
-    assert run_inspect.typed_wrapper_name == "hermes_kanban_run_inspect"
-
-    with pytest.raises(RouteDeniedError) as tier_denied:
-        authorize_api_route(
-            "POST",
-            "/api/plugins/kanban/tasks",
-            configured_tier=PolicyTier.API_METADATA,
-            typed_wrapper_name="hermes_kanban_task_create",
-        )
-    assert tier_denied.value.code == "POLICY_TIER_DENIED"
-
-    with pytest.raises(RouteDeniedError) as denied_ws:
-        authorize_api_route(
-            "GET",
-            "/api/plugins/kanban/events",
-            configured_tier=PolicyTier.OWNER,
-            typed_wrapper_name="hermes_kanban_events_stream",
-        )
-    assert denied_ws.value.code == "UNKNOWN_ROUTE"
+    assert "a2aorch_registry" in create.risk_flags
 
     comment = authorize_api_route(
         "POST",
-        "/api/plugins/kanban/tasks/t_123/comments",
+        "/api/v1/tasks/ACME-12/comments",
         configured_tier=PolicyTier.API_CALL,
-        typed_wrapper_name="hermes_kanban_task_comment_create",
+        typed_wrapper_name="hermes_a2aorch_task_comment_create",
     )
-    assert comment.typed_wrapper_name == "hermes_kanban_task_comment_create"
+    assert comment.typed_wrapper_name == "hermes_a2aorch_task_comment_create"
     assert "state_changing" in comment.risk_flags
-
-    link_create = authorize_api_route(
-        "POST",
-        "/api/plugins/kanban/links",
-        configured_tier=PolicyTier.API_CALL,
-        typed_wrapper_name="hermes_kanban_link_create",
-    )
-    assert link_create.typed_wrapper_name == "hermes_kanban_link_create"
+    assert "a2aorch_registry" in comment.risk_flags
 
     link_delete = authorize_api_route(
         "DELETE",
-        "/api/plugins/kanban/links",
+        "/api/v1/tasks/ACME-12/links/7",
         configured_tier=PolicyTier.API_CALL,
-        typed_wrapper_name="hermes_kanban_link_delete",
+        typed_wrapper_name="hermes_a2aorch_link_delete",
     )
-    assert link_delete.typed_wrapper_name == "hermes_kanban_link_delete"
+    assert link_delete.typed_wrapper_name == "hermes_a2aorch_link_delete"
     assert link_delete.method == "DELETE"
+    assert "a2aorch_registry" in link_delete.risk_flags
 
     with pytest.raises(RouteDeniedError) as tier_denied:
         authorize_api_route(
             "POST",
-            "/api/plugins/kanban/links",
+            "/api/v1/tasks/ACME-12/status",
             configured_tier=PolicyTier.API_METADATA,
-            typed_wrapper_name="hermes_kanban_link_create",
+            typed_wrapper_name="hermes_a2aorch_task_status",
         )
     assert tier_denied.value.code == "POLICY_TIER_DENIED"
 
-    with pytest.raises(RouteDeniedError) as denied_terminate:
-        authorize_api_route(
-            "POST",
-            "/api/plugins/kanban/runs/run_123/terminate",
-            configured_tier=PolicyTier.OWNER,
-            typed_wrapper_name="hermes_kanban_run_terminate",
-        )
-    assert denied_terminate.value.code == "EXPLICITLY_DENIED"
+    with pytest.raises(RouteDeniedError) as unwrapped:
+        authorize_api_route("GET", "/api/v1/tasks", configured_tier=PolicyTier.API_METADATA)
+    assert unwrapped.value.code == "TYPED_WRAPPER_REQUIRED"
 
-    with pytest.raises(RouteDeniedError) as denied_inspect:
+    with pytest.raises(RouteDeniedError) as unknown:
         authorize_api_route(
             "GET",
-            "/api/plugins/kanban/inspect",
+            "/api/v1/events/stream",
             configured_tier=PolicyTier.OWNER,
-            typed_wrapper_name="hermes_kanban_inspect",
+            typed_wrapper_name="hermes_a2aorch_events_stream",
         )
-    assert denied_inspect.value.code == "EXPLICITLY_DENIED"
+    assert unknown.value.code == "UNKNOWN_ROUTE"
 
-    with pytest.raises(RouteDeniedError) as denied_upload:
-        authorize_api_route(
-            "POST",
-            "/api/plugins/kanban/attachments",
-            configured_tier=PolicyTier.OWNER,
-            typed_wrapper_name="hermes_kanban_attachment_upload",
-        )
-    assert denied_upload.value.code == "EXPLICITLY_DENIED"
+    assert len(DENIED_A2AORCH_ROUTES) == 7
+    for method, path in DENIED_A2AORCH_ROUTES:
+        with pytest.raises(RouteDeniedError) as denied:
+            authorize_api_route(
+                method,
+                path,
+                configured_tier=PolicyTier.OWNER,
+                typed_wrapper_name="hermes_a2aorch_raw_request",
+            )
+        assert denied.value.code == "EXPLICITLY_DENIED"
 
 
-def test_kanban_route_allows_only_its_named_wrapper() -> None:
+def test_a2aorch_route_allows_only_its_named_wrapper() -> None:
     with pytest.raises(RouteDeniedError) as mismatch:
         authorize_api_route(
             "GET",
-            "/api/plugins/kanban/tasks/task_123",
+            "/api/v1/tasks/ACME-12",
             configured_tier=PolicyTier.API_METADATA,
-            typed_wrapper_name="hermes_kanban_board_get",
+            typed_wrapper_name="hermes_a2aorch_projects_list",
         )
     assert mismatch.value.code == "TYPED_WRAPPER_MISMATCH"
 
     update = authorize_api_route(
         "PATCH",
-        "/api/plugins/kanban/tasks/task_123",
+        "/api/v1/tasks/ACME-12",
         configured_tier=PolicyTier.API_CALL,
-        typed_wrapper_name="hermes_kanban_task_update",
+        typed_wrapper_name="hermes_a2aorch_task_update",
     )
-    assert update.typed_wrapper_name == "hermes_kanban_task_update"
+    assert update.typed_wrapper_name == "hermes_a2aorch_task_update"
     assert update.method == "PATCH"
+    assert "a2aorch_registry" in update.risk_flags
 
 
 # placeholder newline
@@ -351,27 +323,26 @@ def test_client_adds_bearer_auth_and_writes_redacted_receipts(
     assert token not in all_artifact_text
 
 
-class _KanbanJsonHandler(BaseHTTPRequestHandler):
+class _A2aorchJsonHandler(BaseHTTPRequestHandler):
     calls: list[dict[str, Any]] = []
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib callback name
         type(self).calls.append({"method": "GET", "path": self.path, "headers": dict(self.headers)})
-        body = {"ok": True, "path": self.path}
-        encoded = json.dumps(body).encode("utf-8")
+        body = json.dumps({"ok": True, "path": self.path}).encode("utf-8")
         self.send_response(200)
-        self.send_header("content-type", "application/json; charset=utf-8")
-        self.send_header("content-length", str(len(encoded)))
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
         self.end_headers()
-        self.wfile.write(encoded)
+        self.wfile.write(body)
 
     def log_message(self, format: str, *args: Any) -> None:  # pragma: no cover - silence stdlib logging
         return
 
 
 @pytest.fixture()
-def kanban_json_server() -> str:
-    _KanbanJsonHandler.calls.clear()
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _KanbanJsonHandler)
+def a2aorch_json_server() -> str:
+    _A2aorchJsonHandler.calls.clear()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _A2aorchJsonHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -382,44 +353,82 @@ def kanban_json_server() -> str:
         server.server_close()
 
 
-def test_client_routes_kanban_to_dashboard_origin_without_auth(
+def test_client_routes_a2aorch_to_registry_origin_with_bearer_token(
     tmp_path: Path,
     json_server: str,
-    kanban_json_server: str,
+    a2aorch_json_server: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token = "tk-" + "".join(["S"] * 32)
-    monkeypatch.setenv("HERMES_TOOLKIT_TEST_API_KEY", token)
-    config = _config(tmp_path, api_base_url=json_server, dashboard_base_url=kanban_json_server)
+    hermes_token = "hermes-test-token-" + "H" * 32
+    registry_token = "a2aorch-test-token-" + "R" * 32
+    monkeypatch.setenv("HERMES_TOOLKIT_TEST_API_KEY", hermes_token)
+    monkeypatch.setenv("A2AORCH_TOKEN", registry_token)
+    config = _config(tmp_path, api_base_url=json_server, a2aorch_base_url=f"{a2aorch_json_server}/api/v1")
 
     api_result = HermesApiClient(config).request(
         "GET",
         "/v1/models",
         typed_wrapper_name="hermes_api_models_list",
     )
-    kanban_result = HermesApiClient(config).request(
+    registry_result = HermesApiClient(config).request(
         "GET",
-        "/api/plugins/kanban/board?board=default",
-        typed_wrapper_name="hermes_kanban_board_get",
+        "/api/v1/tasks?include_archived=false",
+        typed_wrapper_name="hermes_a2aorch_tasks_list",
     )
 
     assert api_result.http_status == 200
-    assert kanban_result.http_status == 200
+    assert registry_result.http_status == 200
     assert _JsonHandler.calls[0]["path"] == "/v1/models"
-    assert _JsonHandler.calls[0]["headers"]["Authorization"] == f"Bearer {token}"
-    assert _KanbanJsonHandler.calls[0]["path"] == "/api/plugins/kanban/board?board=default"
-    assert "Authorization" not in _KanbanJsonHandler.calls[0]["headers"]
+    assert _JsonHandler.calls[0]["headers"]["Authorization"] == f"Bearer {hermes_token}"
+    assert _A2aorchJsonHandler.calls[0]["path"] == "/api/v1/tasks?include_archived=false"
+    assert _A2aorchJsonHandler.calls[0]["headers"]["Authorization"] == f"Bearer {registry_token}"
 
-    api_artifact_dir = Path(api_result.artifact_dir)
-    kanban_artifact_dir = Path(kanban_result.artifact_dir)
-    api_request_receipt = json.loads((api_artifact_dir / "request-receipt.json").read_text(encoding="utf-8"))
-    kanban_request_receipt = json.loads((kanban_artifact_dir / "request-receipt.json").read_text(encoding="utf-8"))
-    assert api_request_receipt["request"]["api_surface"] == "api"
-    assert api_request_receipt["request"]["url_origin"] == str(httpx.URL(json_server).copy_with(path="/"))
-    assert kanban_request_receipt["request"]["api_surface"] == "dashboard"
-    assert kanban_request_receipt["request"]["url_origin"] == str(httpx.URL(kanban_json_server.rstrip("/") + "/"))
-    assert kanban_request_receipt["auth"]["api_key_env"] is None
-    assert kanban_request_receipt["auth"]["api_key_env_present"] is False
+    api_origin = str(httpx.URL(json_server).copy_with(path="/"))
+    registry_origin = str(httpx.URL(a2aorch_json_server).copy_with(path="/"))
+    api_receipt = json.loads((Path(api_result.artifact_dir) / "request-receipt.json").read_text(encoding="utf-8"))
+    registry_receipt = json.loads(
+        (Path(registry_result.artifact_dir) / "request-receipt.json").read_text(encoding="utf-8")
+    )
+    assert api_receipt["request"]["api_surface"] == "api"
+    assert api_receipt["request"]["url_origin"] == api_origin
+    assert api_receipt["auth"]["credential_source"] == "hermes_api_key"
+    assert registry_receipt["request"]["api_surface"] == "a2aorch"
+    assert registry_receipt["request"]["url_origin"] == registry_origin
+    assert registry_receipt["request"]["path"] == "/api/v1/tasks?include_archived=false"
+    assert registry_receipt["auth"]["api_key_env"] == "A2AORCH_TOKEN"
+    assert registry_receipt["auth"]["api_key_env_present"] is True
+    assert registry_receipt["auth"]["credential_source"] == "a2aorch_registry_token"
+    assert registry_receipt["headers"]["authorization_present"] is True
+
+    registry_artifact_dir = Path(registry_result.artifact_dir)
+    registry_artifact_text = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(registry_artifact_dir.glob("*.json"))
+    )
+    assert registry_token not in registry_artifact_text
+    assert hermes_token not in registry_artifact_text
+
+
+def test_client_omits_bearer_when_a2aorch_token_is_unresolved(
+    tmp_path: Path,
+    a2aorch_json_server: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("A2AORCH_TOKEN", raising=False)
+    config = _config(tmp_path, api_base_url="http://127.0.0.1:9/v1", a2aorch_base_url=a2aorch_json_server)
+
+    result = HermesApiClient(config).request(
+        "GET",
+        "/api/v1/tasks",
+        typed_wrapper_name="hermes_a2aorch_tasks_list",
+    )
+
+    assert result.http_status == 200
+    assert _A2aorchJsonHandler.calls[0]["path"] == "/api/v1/tasks"
+    assert "Authorization" not in _A2aorchJsonHandler.calls[0]["headers"]
+    receipt = json.loads((Path(result.artifact_dir) / "request-receipt.json").read_text(encoding="utf-8"))
+    assert receipt["request"]["api_surface"] == "a2aorch"
+    assert receipt["auth"]["api_key_env_present"] is False
+    assert receipt["headers"]["authorization_present"] is False
 
 
 def test_client_denies_arbitrary_headers_and_oversized_bodies_without_leaking_values(

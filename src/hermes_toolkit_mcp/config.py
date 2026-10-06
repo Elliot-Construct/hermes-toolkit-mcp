@@ -35,32 +35,33 @@ class HermesApiConfig(BaseModel):
     default_model: str = "hermes-agent"
     allow_streaming: bool = False
     request_timeout_seconds: PositiveInt = 120
-    # The dashboard plugin (Kanban, profiles, orchestration, worker/run visibility) runs on a
-    # separate origin from the OpenAI-compatible /v1 API surface. When the dashboard is bound
-    # to a non-loopback interface it requires basic-auth login session cookies for plugin
-    # API calls. The password can be supplied via env var (preferred for shared contexts) or
-    # directly in this config (acceptable for a secure local file).
-    dashboard_base_url: str = "http://127.0.0.1:9119"
-    dashboard_api_key_env: str | None = None
-    dashboard_auth_provider: str = "basic"
-    dashboard_auth_username: str | None = "janusz"
-    dashboard_auth_password_env: str | None = "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"
-    dashboard_auth_password: str | None = None
     docs: ApiDocsConfig = Field(default_factory=ApiDocsConfig)
 
-    def resolve_dashboard_password(self) -> str | None:
-        if self.dashboard_auth_password:
-            return self.dashboard_auth_password
-        if self.dashboard_auth_password_env:
-            return os.environ.get(self.dashboard_auth_password_env)
-        return None
 
-    def is_dashboard_auth_configured(self) -> bool:
-        return bool(
-            self.dashboard_auth_provider
-            and self.dashboard_auth_username
-            and (self.dashboard_auth_password or self.dashboard_auth_password_env)
-        )
+class A2AOrchApiConfig(BaseModel):
+    """Connection settings for the a2aorch task-registry gateway.
+
+    The registry replaced the retired Kanban dashboard plugin as this
+    toolkit's task surface. It is a separate service (default port 8895) with
+    its own bearer-token auth, so it gets its own origin instead of riding the
+    Hermes API base_url.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_url: str = "http://127.0.0.1:8895/api/v1"
+    token_env: str = "A2AORCH_TOKEN"
+    # Direct token for a secure local file; the env var wins when both are set.
+    token: str | None = None
+    # Reassign and session control ride the A2A bridge synchronously, so the
+    # budget must cover a bridge send rather than a plain read.
+    request_timeout_seconds: PositiveInt = 900
+
+    def resolve_token(self) -> str | None:
+        env_token = os.environ.get(self.token_env)
+        if env_token:
+            return env_token
+        return self.token
 
 
 class HermesFallbackConfig(BaseModel):
@@ -203,6 +204,7 @@ class ToolkitMcpConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     hermes: HermesConfig = Field(default_factory=HermesConfig)
+    a2aorch: A2AOrchApiConfig = Field(default_factory=A2AOrchApiConfig)
     toolkit: ToolkitConfig = Field(default_factory=ToolkitConfig)
     artifacts: ArtifactConfig = Field(default_factory=ArtifactConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
@@ -229,21 +231,10 @@ class ToolkitMcpConfig(BaseModel):
             "homes": sorted(self.hermes.homes.keys()),
             "cli": str(self.hermes.cli),
             "api_base_url": self.hermes.api.base_url,
-            "dashboard_base_url": self.hermes.api.dashboard_base_url,
+            "a2aorch_base_url": self.a2aorch.base_url,
             "api_key_env_present": bool(os.environ.get(self.hermes.api.api_key_env)),
-            "dashboard_api_key_env_present": bool(
-                self.hermes.api.dashboard_api_key_env
-                and os.environ.get(self.hermes.api.dashboard_api_key_env)
-            ),
-            "dashboard_auth_provider": self.hermes.api.dashboard_auth_provider,
-            "dashboard_auth_username_configured": bool(self.hermes.api.dashboard_auth_username),
-            "dashboard_pw_present": (
-                self.hermes.api.dashboard_auth_password is not None
-                or (
-                    self.hermes.api.dashboard_auth_password_env is not None
-                    and os.environ.get(self.hermes.api.dashboard_auth_password_env) is not None
-                )
-            ),
+            "a2aorch_token_env_present": bool(os.environ.get(self.a2aorch.token_env)),
+            "a2aorch_token_present": bool(self.a2aorch.resolve_token()),
             "toolkit_root": str(self.toolkit.root),
             "artifact_root": str(self.artifacts.root),
             "policy_mode": self.policy.mode.value,
