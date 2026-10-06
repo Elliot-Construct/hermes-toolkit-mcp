@@ -185,6 +185,13 @@ hermes_api_runs_start(prompt="…", profile="arthur")
 # -> POST /p/arthur/v1/runs, Authorization: Bearer <arthur's API_SERVER_KEY>
 ```
 
+Every multiplex-mirrored `/v1` wrapper takes the same argument:
+`hermes_api_chat_completions`, `hermes_api_responses_create`/`_get`/`_delete`,
+`hermes_api_models_list`, `hermes_api_skills_list`, `hermes_api_toolsets_list`.
+`/api/jobs` and the a2aorch registry do **not** — they have no `/p/<profile>/`
+mirror, so a `profile` argument there is refused (`PROFILE_NOT_ROUTABLE`) rather
+than sent in a body where it would not route.
+
 `profile` absent (or naming the configured default) keeps the bare path and the
 process credential exactly as before. A named profile's key is read from
 `<root>/profiles/<profile>/.env`; if it is missing or too short the call is
@@ -246,6 +253,7 @@ M2c exposes the first prompt-bearing typed API wrapper (`hermes_api_chat_complet
 - `hermes_api_chat_completions` — OpenAI-compatible `POST /v1/chat/completions` with bounded messages, `stream=false`, and mocked/local-first non-loopback opt-in.
 - `hermes_api_responses_create` / `hermes_api_responses_get` / `hermes_api_responses_delete` — typed OpenAI Responses API wrappers.
 - `hermes_api_runs_start` / `hermes_api_runs_get` / `hermes_api_runs_events` / `hermes_api_runs_stop` / `hermes_api_runs_approval` — typed Runs API wrappers. Each accepts an optional `profile` that is routed in the URL (`/p/<profile>/v1/runs…`) with that profile's own `API_SERVER_KEY`; see **Profile routing** above. The prompt is sent as the Runs API's own `input` field.
+- `hermes_api_chat_completions`, `hermes_api_responses_create` / `_get` / `_delete`, `hermes_api_models_list`, `hermes_api_skills_list`, `hermes_api_toolsets_list` — also accept `profile`, routed in the URL on the same contract. The routing argument is stripped from the request body (`profile` never serialises), since the server would accept and ignore it there.
 - `hermes_api_jobs_list` / `hermes_api_jobs_create` / `hermes_api_jobs_get` / `hermes_api_jobs_update` / `hermes_api_jobs_delete` / `hermes_api_jobs_pause` / `hermes_api_jobs_resume` / `hermes_api_jobs_run` — typed scheduler/cron job wrappers. `hermes_api_jobs_list` uses concrete `limit=25`/`offset=0` defaults, omits prompt bodies from summaries (use `hermes_api_jobs_get` for the full definition), records upstream body bytes/hash in receipts, and returns pagination fields plus a 24 KiB item budget/32 KiB final-envelope budget.
 - `hermes_api_skills_list` — `GET /v1/skills` returning structured skill metadata with optional category/limit/offset filters.
 - `hermes_api_toolsets_list` — `GET /v1/toolsets` returning structured toolset metadata with optional category/limit/offset filters.

@@ -18,6 +18,14 @@ class ModelsListRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     include_internal: bool = Field(default=False, description="Include internal models in the listing.")
+    profile: str | None = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Optional Hermes profile to read from. Routed in the URL (/p/<profile>/v1/models) with "
+            "that profile's own API_SERVER_KEY, so the listing is the profile's own model set."
+        ),
+    )
 
 
 class CapabilitiesGetRequest(BaseModel):
@@ -109,6 +117,15 @@ class ResponsesCreateRequest(BaseModel):
         default=None,
         description="Optional caller metadata key/value pairs.",
     )
+    profile: str | None = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Optional Hermes profile the response is created on. Routed in the URL "
+            "(/p/<profile>/v1/responses) with that profile's own API_SERVER_KEY. Never sent in the "
+            "body — a body 'profile' does not route."
+        ),
+    )
 
     @model_validator(mode="after")
     def _streaming_disabled(self) -> Self:
@@ -137,7 +154,11 @@ class ResponsesCreateRequest(BaseModel):
         return value
 
     def api_payload(self, config: ToolkitMcpConfig) -> dict[str, Any]:
-        payload = self.model_dump(mode="json", exclude_none=True)
+        # ``profile`` is a routing argument, not a body field: the server selects
+        # the profile from the URL and ignores a body key of the same name, so
+        # serialising it here would let a caller believe they addressed a profile
+        # they did not.
+        payload = self.model_dump(mode="json", exclude_none=True, exclude={"profile"})
         payload["model"] = self.model or config.hermes.api.default_model
         payload["stream"] = False
         return payload
@@ -151,6 +172,15 @@ class ResponsesGetRequest(BaseModel):
         max_length=MAX_RESPONSE_ID_CHARS,
         pattern=_RESPONSE_ID_PATTERN,
         description="Stored response id to retrieve.",
+    )
+    profile: str | None = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Optional Hermes profile that owns the stored response. Routed in the URL "
+            "(/p/<profile>/v1/responses/{id}); a response created on a named profile is only "
+            "visible in that profile's store."
+        ),
     )
 
     @field_validator("response_id")
@@ -169,6 +199,14 @@ class ResponsesDeleteRequest(BaseModel):
         max_length=MAX_RESPONSE_ID_CHARS,
         pattern=_RESPONSE_ID_PATTERN,
         description="Stored response id to delete.",
+    )
+    profile: str | None = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Optional Hermes profile that owns the stored response. Routed in the URL "
+            "(/p/<profile>/v1/responses/{id})."
+        ),
     )
 
     @field_validator("response_id")
@@ -330,6 +368,14 @@ class SkillsListRequest(BaseModel):
     )
     limit: int | None = Field(default=None, ge=1, le=10000, description="Optional limit; currently reserved.")
     offset: int | None = Field(default=None, ge=0, description="Optional offset; currently reserved.")
+    profile: str | None = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Optional Hermes profile to read from. Routed in the URL (/p/<profile>/v1/skills) with "
+            "that profile's own API_SERVER_KEY, so the listing is the profile's own skills."
+        ),
+    )
 
 
 class ToolsetsListRequest(BaseModel):
@@ -343,6 +389,14 @@ class ToolsetsListRequest(BaseModel):
     )
     limit: int | None = Field(default=None, ge=1, le=10000, description="Optional limit; currently reserved.")
     offset: int | None = Field(default=None, ge=0, description="Optional offset; currently reserved.")
+    profile: str | None = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Optional Hermes profile to read from. Routed in the URL (/p/<profile>/v1/toolsets) with "
+            "that profile's own API_SERVER_KEY, so the listing is the profile's own toolsets."
+        ),
+    )
 
 
 SKILLS_LIST_INPUT_SCHEMA: dict[str, Any] = SkillsListRequest.model_json_schema()
@@ -404,6 +458,7 @@ def _call_metadata_get(
     path: str,
     request_model: BaseModel | None = None,
     query_params: dict[str, Any] | None = None,
+    profile: str | None = None,
 ) -> dict[str, Any]:
     """Shared GET wrapper for Hermes API metadata endpoints."""
 
@@ -423,6 +478,7 @@ def _call_metadata_get(
             "GET",
             path,
             typed_wrapper_name=wrapper_name,
+            profile=profile,
         )
     except RouteDeniedError as exc:
         raise DiscoveryError(exc.code, str(exc)) from exc
@@ -452,7 +508,10 @@ def _call_metadata_get(
 
 
 def hermes_api_models_list(config: ToolkitMcpConfig, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Typed wrapper for GET /v1/models."""
+    """Typed wrapper for GET /v1/models.
+
+    ``profile`` addresses a named profile's own model listing in the URL.
+    """
 
     try:
         request = ModelsListRequest.model_validate(arguments or {})
@@ -464,6 +523,7 @@ def hermes_api_models_list(config: ToolkitMcpConfig, arguments: dict[str, Any] |
         path="/v1/models",
         request_model=request,
         query_params={"include_internal": "true" if request.include_internal else None},
+        profile=request.profile,
     )
 
 
@@ -995,6 +1055,7 @@ def hermes_api_responses_create(config: ToolkitMcpConfig, arguments: dict[str, A
         wrapper_name="hermes_api_responses_create",
         path="/v1/responses",
         json_body=payload,
+        profile=request.profile,
         require_model_spend=True,
     )
     result["safe_next_actions"] = [
@@ -1016,6 +1077,7 @@ def hermes_api_responses_get(config: ToolkitMcpConfig, arguments: dict[str, Any]
         config,
         wrapper_name="hermes_api_responses_get",
         path=f"/v1/responses/{request.response_id}",
+        profile=request.profile,
     )
     result["safe_next_actions"] = [
         "Use hermes_api_responses_create with previous_response_id to continue the conversation.",
@@ -1037,6 +1099,7 @@ def hermes_api_responses_delete(config: ToolkitMcpConfig, arguments: dict[str, A
         wrapper_name="hermes_api_responses_delete",
         method="DELETE",
         path=f"/v1/responses/{request.response_id}",
+        profile=request.profile,
         safe_next_actions=["Confirm the response id is no longer retrievable with hermes_api_responses_get."],
     )
 
@@ -1309,6 +1372,7 @@ def hermes_api_skills_list(config: ToolkitMcpConfig, arguments: dict[str, Any] |
         path="/v1/skills",
         request_model=request,
         query_params=query_params,
+        profile=request.profile,
     )
 
 
@@ -1332,4 +1396,5 @@ def hermes_api_toolsets_list(config: ToolkitMcpConfig, arguments: dict[str, Any]
         path="/v1/toolsets",
         request_model=request,
         query_params=query_params,
+        profile=request.profile,
     )

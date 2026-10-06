@@ -24,16 +24,26 @@ HERMES_AGENT = Path(r"C:/Users/Elliot/Hermes-Workspace/hermes-agent-fw03")
 sys.path.insert(0, str(HERMES_AGENT))
 
 
-def build_home_tree(root: Path, owner_key: str, arthur_key: str) -> None:
-    """Root profile + arthur (own key) + vera (live profile, NO server key)."""
+def build_home_tree(root: Path, owner_key: str, arthur_key: str, vera_key: str | None = None) -> None:
+    """Root profile + arthur (own key) + vera.
+
+    ``vera_key`` defaults to ``None``: a live profile with identity but no
+    ``API_SERVER_KEY`` of its own, which is the gateway's 401 case. Supplying a
+    value writes a *usable-looking* key that the gateway's own secret scope will
+    not hold — the case the harness needs to observe a real 401 end to end.
+    """
 
     (root / "profiles" / "arthur").mkdir(parents=True, exist_ok=True)
     (root / "profiles" / "vera").mkdir(parents=True, exist_ok=True)
     (root / "config.yaml").write_text("gateway:\n  multiplex_profiles: true\n", encoding="utf-8")
     (root / ".env").write_text(f"API_SERVER_KEY={owner_key}\n", encoding="utf-8")
     (root / "profiles" / "arthur" / ".env").write_text(f"API_SERVER_KEY={arthur_key}\n", encoding="utf-8")
-    # vera is a live profile with identity but no API_SERVER_KEY of its own.
-    (root / "profiles" / "vera" / ".env").write_text("SOME_OTHER_KEY=not-a-server-key\n", encoding="utf-8")
+    # vera is a live profile with identity; whether it carries a key is the
+    # caller's choice (None -> the gateway's own "no profile-scoped key" 401).
+    (root / "profiles" / "vera" / ".env").write_text(
+        f"API_SERVER_KEY={vera_key}\n" if vera_key else "SOME_OTHER_KEY=not-a-server-key\n",
+        encoding="utf-8",
+    )
     for name in ("arthur", "vera"):
         (root / "profiles" / name / "config.yaml").write_text(f"profile: {name}\n", encoding="utf-8")
 

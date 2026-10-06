@@ -33,6 +33,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- **`profile` extended to the rest of the multiplex-mirrored `/v1` surface.**
+  `hermes_api_chat_completions`, `hermes_api_responses_create` / `_get` /
+  `_delete`, `hermes_api_models_list`, `hermes_api_skills_list` and
+  `hermes_api_toolsets_list` now take the same `profile` argument as the Runs
+  wrappers and route it in the URL. The routing argument is excluded from the
+  request body, so it can never be sent where the server would ignore it.
+  `/api/jobs` and the a2aorch registry still refuse `profile`
+  (`PROFILE_NOT_ROUTABLE`): they have no `/p/<profile>/` mirror.
+
 - **`hermes_api_runs_start` sends the prompt as `input`.** The Runs API's own
   field name for the prompt is `input`; the wrapper previously sent `prompt`,
   which the live server rejects with `400 Missing 'input' field`. The MCP

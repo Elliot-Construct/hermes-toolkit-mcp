@@ -118,6 +118,17 @@ class _ProfileAwareHandler(BaseHTTPRequestHandler):
             return
         self._respond(200, {"run_id": "run_123", "status": "started", "profile": profile})
 
+    def do_DELETE(self) -> None:  # noqa: N802 - stdlib callback name
+        self._record("DELETE")
+        profile = self._profile_of()
+        if profile not in type(self).served:
+            self._respond(404, {"error": "Unknown or unconfigured profile"})
+            return
+        if not self._authorize():
+            self._respond(401, {"error": {"code": "gateway_auth_failed"}})
+            return
+        self._respond(200, {"id": "resp_1", "deleted": True, "profile": profile})
+
     def log_message(self, format: str, *args: Any) -> None:  # pragma: no cover - silence stdlib logging
         return
 
@@ -714,3 +725,126 @@ def test_non_default_default_profile_name_is_respected(tmp_path: Path, gateway: 
     assert result["ok"] is True, result
     assert _ProfileAwareHandler.calls[-1]["path"] == "/v1/runs"
     assert _ProfileAwareHandler.calls[-1]["headers"]["Authorization"] == f"Bearer {DEFAULT_KEY}"
+
+
+# ---------------------------------------------------------------------------
+# The rest of the /v1 surface routes by profile too
+# ---------------------------------------------------------------------------
+
+
+def _profiled_reads() -> list[tuple[str, dict[str, Any], str, str]]:
+    """(wrapper, args, expected profiled path, expected default path) for /v1 reads."""
+
+    return [
+        ("hermes_api_models_list", {}, "/p/arthur/v1/models", "/v1/models"),
+        ("hermes_api_skills_list", {}, "/p/arthur/v1/skills", "/v1/skills"),
+        ("hermes_api_toolsets_list", {}, "/p/arthur/v1/toolsets", "/v1/toolsets"),
+        ("hermes_api_responses_get", {"response_id": "resp_1"}, "/p/arthur/v1/responses/resp_1", "/v1/responses/resp_1"),
+    ]
+
+
+@pytest.mark.parametrize("wrapper,args,profiled_path,default_path", _profiled_reads())
+def test_metadata_wrappers_route_by_profile(
+    tmp_path: Path,
+    gateway: str,
+    monkeypatch: pytest.MonkeyPatch,
+    wrapper: str,
+    args: dict[str, Any],
+    profiled_path: str,
+    default_path: str,
+) -> None:
+    """Every multiplex-mirrored /v1 read takes ``profile`` and prefixes the path."""
+
+    root = tmp_path / "home"
+    root.mkdir(exist_ok=True)
+    _write_profile_key(root, "arthur", ARTHUR_KEY)
+    monkeypatch.setenv("HERMES_TOOLKIT_TEST_API_KEY", DEFAULT_KEY)
+    config = _config(tmp_path, api_base_url=gateway, home=root)
+
+    default_result = _run_tool(wrapper, dict(args), config)
+    assert default_result["ok"] is True, default_result
+    assert _ProfileAwareHandler.calls[-1]["path"] == default_path
+    assert _ProfileAwareHandler.calls[-1]["headers"]["Authorization"] == f"Bearer {DEFAULT_KEY}"
+
+    profiled_result = _run_tool(wrapper, {**args, "profile": "arthur"}, config)
+    assert profiled_result["ok"] is True, profiled_result
+    assert _ProfileAwareHandler.calls[-1]["path"] == profiled_path
+    assert _ProfileAwareHandler.calls[-1]["headers"]["Authorization"] == f"Bearer {ARTHUR_KEY}"
+
+
+def test_responses_create_routes_by_profile_without_leaking_profile_into_the_body(
+    tmp_path: Path, gateway: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``api_payload`` must not serialise the routing argument into the body."""
+
+    root = tmp_path / "home"
+    root.mkdir(exist_ok=True)
+    _write_profile_key(root, "arthur", ARTHUR_KEY)
+    monkeypatch.setenv("HERMES_TOOLKIT_TEST_API_KEY", DEFAULT_KEY)
+
+    result = _run_tool(
+        "hermes_api_responses_create",
+        {"input": "hello", "profile": "arthur"},
+        _config(tmp_path, api_base_url=gateway, home=root),
+    )
+    assert result["ok"] is True, result
+    call = _ProfileAwareHandler.calls[-1]
+    assert call["path"] == "/p/arthur/v1/responses"
+    assert call["headers"]["Authorization"] == f"Bearer {ARTHUR_KEY}"
+    assert "profile" not in call["body"], call["body"]
+    assert call["body"]["input"] == "hello"
+
+
+def test_chat_completions_routes_by_profile_without_leaking_profile_into_the_body(
+    tmp_path: Path, gateway: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "home"
+    root.mkdir(exist_ok=True)
+    _write_profile_key(root, "arthur", ARTHUR_KEY)
+    monkeypatch.setenv("HERMES_TOOLKIT_TEST_API_KEY", DEFAULT_KEY)
+
+    result = _run_tool(
+        "hermes_api_chat_completions",
+        {"model": "hermes-agent", "messages": [{"role": "user", "content": "hi"}], "profile": "arthur"},
+        _config(tmp_path, api_base_url=gateway, home=root),
+    )
+    assert result["ok"] is True, result
+    call = _ProfileAwareHandler.calls[-1]
+    assert call["path"] == "/p/arthur/v1/chat/completions"
+    assert call["headers"]["Authorization"] == f"Bearer {ARTHUR_KEY}"
+    assert "profile" not in call["body"], call["body"]
+
+
+def test_responses_delete_routes_by_profile(tmp_path: Path, gateway: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "home"
+    root.mkdir(exist_ok=True)
+    _write_profile_key(root, "arthur", ARTHUR_KEY)
+    monkeypatch.setenv("HERMES_TOOLKIT_TEST_API_KEY", DEFAULT_KEY)
+
+    result = _run_tool(
+        "hermes_api_responses_delete",
+        {"response_id": "resp_1", "profile": "arthur"},
+        _config(tmp_path, api_base_url=gateway, home=root),
+    )
+    assert result["ok"] is True, result
+    assert _ProfileAwareHandler.calls[-1]["path"] == "/p/arthur/v1/responses/resp_1"
+
+
+def test_profiled_metadata_read_refuses_a_keyless_profile(
+    tmp_path: Path, gateway: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The local fail-closed rule applies to every profiled wrapper, not just Runs."""
+
+    root = tmp_path / "home"
+    root.mkdir(exist_ok=True)
+    monkeypatch.setenv("HERMES_TOOLKIT_TEST_API_KEY", DEFAULT_KEY)
+    _ProfileAwareHandler.keyed = set()
+
+    result = _run_tool(
+        "hermes_api_models_list",
+        {"profile": "arthur"},
+        _config(tmp_path, api_base_url=gateway, home=root),
+    )
+    assert result["ok"] is False
+    assert result["error_code"] == "PROFILE_KEY_MISSING"
+    assert _ProfileAwareHandler.calls == []

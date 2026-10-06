@@ -22,12 +22,15 @@ Path arguments must resolve under configured allowed roots. Unknown profiles, ou
 
 Under a multiplexed gateway every native route is mounted twice — `{path}` and `/p/{profile}{path}` — and the **URL segment**, never a request-body field, selects the profile a request runs as, including which credential authorizes it. A body `profile` is not a routing selector: the server accepts it and ignores it, so a run addressed to `arthur` through the body alone lands on the default profile with the default key.
 
-The Runs API wrappers therefore express `profile` in the URL:
+The Runs API wrappers therefore express `profile` in the URL. Every
+multiplex-mirrored `/v1` wrapper takes it — Runs, chat completions, responses,
+models, skills and toolsets. The routing argument is excluded from the request
+body, so it can never be serialised where the server would ignore it.
 
 | `profile` argument | Path sent | Credential |
 |---|---|---|
-| absent, or the configured default profile | `/v1/runs` | the process's `hermes.api.api_key_env` |
-| a named profile (`arthur`) | `/p/arthur/v1/runs` | `API_SERVER_KEY` read from `<root>/profiles/arthur/.env` |
+| absent, or the configured default profile | `/v1/…` | the process's `hermes.api.api_key_env` |
+| a named profile (`arthur`) | `/p/arthur/v1/…` | `API_SERVER_KEY` read from `<root>/profiles/arthur/.env` |
 
 The key name is always `API_SERVER_KEY`; the gateway resolves a profile's credential through `agent.secret_scope` under that name, so there is no `<PROFILE>_API_SERVER_KEY` convention. The profile's key is read from its own file and nowhere else — profile A's key can never authenticate a call addressed to profile B.
 

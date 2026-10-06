@@ -90,6 +90,15 @@ class ChatCompletionRequest(BaseModel):
     stream: bool = False
     temperature: float | None = Field(default=None, ge=0, le=2)
     max_tokens: int | None = Field(default=None, ge=1, le=131_072)
+    profile: str | None = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Optional Hermes profile the completion runs as. Routed in the URL "
+            "(/p/<profile>/v1/chat/completions) with that profile's own API_SERVER_KEY, read from "
+            "the profile's .env. Never sent in the body — a body 'profile' does not route."
+        ),
+    )
 
     @model_validator(mode="after")
     def _streaming_disabled(self) -> Self:
@@ -98,7 +107,11 @@ class ChatCompletionRequest(BaseModel):
         return self
 
     def api_payload(self, config: ToolkitMcpConfig) -> dict[str, Any]:
-        payload = self.model_dump(mode="json", exclude_none=True)
+        # ``profile`` is a routing argument, not a body field: the gateway selects
+        # the profile from the URL and ignores a body key of the same name, so
+        # serialising it here would let a caller believe they addressed a profile
+        # they did not.
+        payload = self.model_dump(mode="json", exclude_none=True, exclude={"profile"})
         payload["model"] = self.model or config.hermes.api.default_model
         payload["stream"] = False
         return payload
@@ -168,7 +181,13 @@ def _choice_count(body: Any) -> int | None:
 
 
 def hermes_api_chat_completions(config: ToolkitMcpConfig, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Typed wrapper for OpenAI-compatible POST /v1/chat/completions."""
+    """Typed wrapper for OpenAI-compatible POST /v1/chat/completions.
+
+    ``profile`` selects the profile **in the URL** — ``/p/<profile>/v1/chat/completions``
+    with that profile's own ``API_SERVER_KEY`` — so the completion runs as the
+    addressed profile. It is never written to the body: the gateway routes on the
+    URL segment and would ignore a body key of the same name.
+    """
 
     _ensure_chat_completion_gates(config)
     request = parse_chat_completion_request(config, arguments)
@@ -179,6 +198,7 @@ def hermes_api_chat_completions(config: ToolkitMcpConfig, arguments: dict[str, A
             "/v1/chat/completions",
             typed_wrapper_name="hermes_api_chat_completions",
             json_body=payload,
+            profile=request.profile,
         )
     except RouteDeniedError as exc:
         raise DiscoveryError(exc.code, str(exc)) from exc
