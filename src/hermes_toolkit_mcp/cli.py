@@ -24,6 +24,13 @@ def build_parser() -> argparse.ArgumentParser:
     serve = subparsers.add_parser("serve", help="Start the MCP stdio server (default when no subcommand is provided).")
     serve.add_argument("--stdio", action="store_true", default=True, help="Use stdio transport (default).")
 
+    serve_http = subparsers.add_parser(
+        "serve-http",
+        help="Start the MCP Streamable-HTTP server (loopback bind, bearer token required).",
+    )
+    serve_http.add_argument("--host", default=None, help="Bind host (default: http.host, 127.0.0.1).")
+    serve_http.add_argument("--port", type=int, default=None, help="Bind port (default: http.port, 8793).")
+
     check = subparsers.add_parser("config-check", help="Validate config and print a redacted summary.")
     check.add_argument("--json", action="store_true", help="Emit JSON instead of a short text summary.")
     return parser
@@ -115,6 +122,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .server import run_stdio_server
 
         return run_stdio_server(config_path=args.config)
+
+    if args.command == "serve-http":
+        from .http_server import run_http_server
+
+        return run_http_server(config_path=args.config, host=args.host, port=args.port)
 
     if args.command == "config-check":
         config = load_config(Path(args.config) if args.config else None)

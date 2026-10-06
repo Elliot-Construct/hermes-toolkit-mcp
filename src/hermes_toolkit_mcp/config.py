@@ -111,6 +111,85 @@ class HermesMutationCommandsConfig(BaseModel):
         return None if value is None else _expand_path(value)
 
 
+class HttpServerConfig(BaseModel):
+    """Settings for the Streamable-HTTP MCP transport (`serve-http`).
+
+    The stdio server needs no listener and no auth of its own; the HTTP
+    transport does, because it has a socket. It binds loopback by default and
+    refuses to start unless a bearer token is resolvable — the reverse proxy
+    in front of it only routes and strips, it never authenticates.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    host: str = "127.0.0.1"
+    port: PositiveInt = 8793
+    path: str = "/mcp"
+    health_path: str = "/health"
+    token_env: str = "HERMES_TOOLKIT_MCP_HTTP_TOKEN"
+    # Direct token for a secure local file; the env var wins when both are set.
+    token: str | None = None
+    # Stateless keeps a fresh transport per request: no session table to leak
+    # or grow, and Traefik never needs session affinity. JSON responses avoid
+    # long-lived SSE streams through the proxy.
+    stateless: bool = True
+    json_response: bool = True
+    # Extra Host headers to accept besides loopback, e.g. the public hostname
+    # a reverse proxy forwards under. DNS-rebinding protection stays on.
+    allowed_hosts: list[str] = Field(default_factory=list)
+    allowed_origins: list[str] = Field(default_factory=list)
+
+    @field_validator("path", "health_path")
+    @classmethod
+    def _absolute_path(cls, value: str) -> str:
+        if not value.startswith("/"):
+            raise ValueError(f"must start with '/': {value!r}")
+        return value
+
+    @field_validator("allowed_hosts", "allowed_origins")
+    @classmethod
+    def _no_blank_entries(cls, value: list[str]) -> list[str]:
+        cleaned = [entry.strip() for entry in value if entry and entry.strip()]
+        if len(cleaned) != len(value):
+            raise ValueError("allowed_hosts/allowed_origins entries must be non-empty")
+        return cleaned
+
+    def resolve_token(self) -> str | None:
+        env_token = os.environ.get(self.token_env)
+        if env_token:
+            return env_token
+        return self.token
+
+    def effective_allowed_hosts(self) -> list[str]:
+        """Configured hosts plus the loopback spellings local clients use."""
+        return [
+            *self.allowed_hosts,
+            "127.0.0.1:*",
+            "localhost:*",
+            "[::1]:*",
+        ]
+
+    def effective_allowed_origins(self) -> list[str]:
+        """Configured origins plus https:// for each concrete allowed host.
+
+        A browser client on the public hostname sends `Origin`, and the MCP
+        transport rejects any origin it does not know — so every host an
+        operator opts into must have its https origin implied unless they
+        spell one out themselves.
+        """
+        derived = [
+            f"https://{host}"
+            for host in self.allowed_hosts
+            if not host.endswith(":*")
+        ]
+        return [
+            *self.allowed_origins,
+            *derived,
+            "http://127.0.0.1:*",
+            "http://localhost:*",
+        ]
+
+
 class HermesConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -205,6 +284,7 @@ class ToolkitMcpConfig(BaseModel):
 
     hermes: HermesConfig = Field(default_factory=HermesConfig)
     a2aorch: A2AOrchApiConfig = Field(default_factory=A2AOrchApiConfig)
+    http: HttpServerConfig = Field(default_factory=HttpServerConfig)
     toolkit: ToolkitConfig = Field(default_factory=ToolkitConfig)
     artifacts: ArtifactConfig = Field(default_factory=ArtifactConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
