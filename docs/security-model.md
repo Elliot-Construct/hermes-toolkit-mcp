@@ -93,3 +93,16 @@ The stdio server reserves stdout for MCP protocol frames. Terminal-friendly outp
 ## External action boundary
 
 M1 denies or defers: package publication, public posts/messages, third-party tracker writes, gateway restarts, config writes, skill writes, cron changes, git push/merge/rewrite, service/container mutations, and public-doc refresh. Later tools must add exact-scope gates instead of hiding side effects behind fallback prompts; M8 satisfies this for local skill/config patch applies and preconfigured owner commands only, not for public/external mutations.
+
+## HTTP transport authentication (`serve-http`)
+
+The Streamable-HTTP listener is a public HTTPS surface behind Traefik, and its gate lives in this process — the proxy routes and strips the `/hermestoolkit` mount only. Auth at the proxy is deliberately absent: `basicAuth`/`forwardAuth` consume the `Authorization` header that OAuth needs. DNS-rebinding protection stays on through the SDK's Host/Origin allowlists (`enable_dns_rebinding_protection` is never set false), and `/health` is never authenticated.
+
+- **Gate selection, fail closed.** `http.oauth.enabled` (default `true`) makes OAuth the gate; `http.bearer_fallback` (default `false`) additionally accepts the static `http.token`. No gate configured, a missing `http.oauth.issuer`, or unresolvable login credentials abort startup with exit 2 before the socket binds; the message names the variables to set, never a value.
+- **Protocol.** Authorization-code flow only, PKCE S256 mandatory, `response_type=code`; dynamic client registration (RFC 7591) is enabled; authorization codes (5 min), pending login requests (10 min) and refresh tokens are all single use, refresh rotating.
+- **Redirect URIs.** https on any host, or http on loopback only — fragments, userinfo and custom app schemes are rejected at registration, because an accepted redirect URI is a URL the browser is sent to with an authorization code in it.
+- **One user.** Login compares username *and* password with `hmac.compare_digest` (both halves, no short-circuit), answers every failure with the same generic text, shows the requesting client's name and scopes so a phished click is visible as such, and is rate limited per caller address (the key is the proxy-appended `X-Forwarded-For` entry, not a caller-supplied one).
+- **Token storage.** Opaque `hmt_…` values; only `SHA-256(token)` is kept, so process memory, artifacts and receipts hold digests rather than bearer values. Access tokens live 1 h, refresh tokens 30 d.
+- **Discovery and challenge.** An unauthenticated `/mcp` call answers 401 carrying `WWW-Authenticate: Bearer … resource_metadata="…"`; discovery is served under every path shape clients try (`oauth/discovery.py`) with identical documents.
+- **Receipts.** `safe_summary()` exposes presence booleans and the public issuer only — never the username, password or static token.
+- **Accepted residual risk.** Open registration plus a login form means a phished operator could authorise a client someone else registered; PKCE does not stop that. Mitigations are the redirect-URI policy, the named-client login page, per-address rate limits and single-use 128-bit request ids — see `docs/oauth-contract.md` §7.

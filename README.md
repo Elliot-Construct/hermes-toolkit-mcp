@@ -101,6 +101,74 @@ uv run pytest
 
 Running `uv run hermes-toolkit-mcp` with no subcommand starts the stdio MCP server. Use `--help` or `config-check` for terminal-friendly output.
 
+## HTTP transport (`serve-http`) and OAuth 2.1
+
+`serve-http` puts the same server behind a loopback Streamable-HTTP listener
+(`127.0.0.1:8793` by default). stdio remains the default transport and needs no
+socket and no credentials of its own.
+
+The listener is guarded by **OAuth 2.1 implemented inside this process**, not by
+the reverse proxy: Traefik routes and strips the `/hermestoolkit` mount only, and
+must stay that way — a `basicAuth` or `forwardAuth` middleware in front would
+consume the `Authorization` header the whole flow depends on. The full contract
+(issuer, every discovery shape, protocol invariants, fail-closed matrix,
+residual risk) is [`docs/oauth-contract.md`](docs/oauth-contract.md) and is
+machine-checked by `tests/test_oauth_contract.py`.
+
+```bash
+# the deployed process
+.venv/Scripts/python.exe -m hermes_toolkit_mcp \
+  --config C:/ProgramData/hermes-toolkit-mcp/config.yaml serve-http
+```
+
+Public surface at `https://opscentre.datawyse.ai/hermestoolkit` (what the
+backend sees after the proxy strips the mount):
+
+| Public path | Backend path | Purpose |
+| --- | --- | --- |
+| `/hermestoolkit/mcp` | `/mcp` | Streamable-HTTP MCP endpoint — **401 without a token** |
+| `/hermestoolkit/health` | `/health` | liveness — never authenticated |
+| `/hermestoolkit/authorize` | `/authorize` | authorization request (PKCE S256, `code` only) |
+| `/hermestoolkit/login` | `/login` | the single-user sign-in form |
+| `/hermestoolkit/token` | `/token` | code → tokens, refresh rotation |
+| `/hermestoolkit/register` | `/register` | dynamic client registration (RFC 7591) |
+| `/hermestoolkit/.well-known/oauth-protected-resource` | `/.well-known/oauth-protected-resource` | RFC 9728 metadata (also at the root aliases) |
+| `/hermestoolkit/.well-known/oauth-authorization-server` | `/.well-known/oauth-authorization-server` | RFC 8414 metadata (also at the root aliases) |
+
+The root-level aliases (`/.well-known/oauth-*/hermestoolkit`) need their own
+Traefik routers because they must **not** be stripped; the prefixed forms ride
+the existing `opscentre-hermestoolkit` router. See `oauth/discovery.py` for the
+full path set clients actually try.
+
+### Which gate is active
+
+```yaml
+http:
+  bearer_fallback: false   # default: OAuth only. true = also accept http.token
+  oauth:
+    enabled: true          # default; false drops back to legacy bearer-only
+    issuer: "https://opscentre.datawyse.ai/hermestoolkit"
+    username: "elliot"     # or username_env (HERMES_TOOLKIT_MCP_OAUTH_USERNAME)
+    password: "…"          # or password_env (HERMES_TOOLKIT_MCP_OAUTH_PASSWORD); env wins
+    scopes: ["mcp"]
+    allow_dynamic_client_registration: true
+```
+
+`bearer_fallback` defaults to **`false`** — the shipped posture is OAuth only,
+and the legacy static token is one config line away in either direction.
+Startup fails closed (exit 2, no listener) whenever no gate is configured, the
+issuer is missing, or the login credential cannot be resolved; the message names
+the variables to set and never a value. `http.token` remains valid only while
+`bearer_fallback: true`.
+
+Session lifetime: access 1 h, refresh 30 d (rotating, single use),
+authorization code 5 min (single use), pending login request 10 min (single
+use). Tokens are opaque and stored only as `SHA-256(token)`.
+
+Full test suite: `uv run pytest` — the HTTP surface is `tests/test_http_server.py`,
+the flow itself is `tests/test_oauth_provider.py` / `tests/test_oauth_login.py`,
+and the end-to-end evidence harness lives in `evidence/oauth_mcp_dance.py`.
+
 ## M1 read-only tools
 
 - `hermes_status_overview`
