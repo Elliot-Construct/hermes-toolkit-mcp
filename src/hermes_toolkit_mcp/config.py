@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator
@@ -111,13 +112,97 @@ class HermesMutationCommandsConfig(BaseModel):
         return None if value is None else _expand_path(value)
 
 
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
+
+
+class OAuthServerConfig(BaseModel):
+    """OAuth 2.1 authorization server embedded in the MCP process (see docs/oauth-contract.md).
+
+    This is the gate for `/mcp`. It is deliberately not a full identity
+    product: one user, one login form, PKCE-S256 code flow, dynamic client
+    registration. Every value here is either public (issuer, endpoints) or a
+    credential that must never reach `safe_summary`, a log line or git.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # OAuth is the default gate; switching it off falls back to the static
+    # bearer token (legacy mode), and switching both off refuses to start.
+    enabled: bool = True
+    # Public issuer/authorization base URL. All endpoint URLs handed to
+    # clients are derived from it, because the reverse proxy strips the
+    # mount prefix before the request reaches us.
+    issuer: str | None = None
+    # Single-user login credential: env var wins over the config file, the
+    # same precedence the HTTP bearer token uses.
+    username_env: str = "HERMES_TOOLKIT_MCP_OAUTH_USERNAME"
+    username: str | None = None
+    password_env: str = "HERMES_TOOLKIT_MCP_OAUTH_PASSWORD"
+    password: str | None = None
+    scopes: list[str] = Field(default_factory=lambda: ["mcp"])
+    allow_dynamic_client_registration: bool = True
+    # Extra https hosts accepted as registered redirect URIs besides the
+    # loopback-http and any-https default policy.
+    allowed_redirect_hosts: list[str] = Field(default_factory=list)
+    access_token_ttl_seconds: PositiveInt = 3_600
+    refresh_token_ttl_seconds: PositiveInt = 2_592_000
+    authorization_code_ttl_seconds: PositiveInt = 300
+    login_request_ttl_seconds: PositiveInt = 600
+    # Bound on DCR-created clients: registration is anonymous, so the store
+    # must not be growable by an unauthenticated caller.
+    max_registered_clients: PositiveInt = 512
+
+    @field_validator("issuer")
+    @classmethod
+    def _valid_issuer(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parsed = urlsplit(value.strip())
+        if parsed.query or parsed.fragment:
+            raise ValueError("issuer must not carry a query string or fragment")
+        if parsed.scheme not in {"https", "http"} or not parsed.netloc:
+            raise ValueError(f"issuer must be an absolute http(s) URL: {value!r}")
+        # RFC 8414 wants https; loopback is the standard local-dev exception.
+        if parsed.scheme == "http" and parsed.hostname not in _LOOPBACK_HOSTS:
+            raise ValueError("a non-loopback issuer must be https")
+        return value.strip().rstrip("/")
+
+    @field_validator("scopes")
+    @classmethod
+    def _no_blank_scopes(cls, value: list[str]) -> list[str]:
+        cleaned = [scope.strip() for scope in value]
+        if not cleaned or any(not scope for scope in cleaned):
+            raise ValueError("http.oauth.scopes must be a non-empty list of scopes")
+        if len(set(cleaned)) != len(cleaned):
+            raise ValueError("http.oauth.scopes must not repeat a scope")
+        return cleaned
+
+    @field_validator("allowed_redirect_hosts")
+    @classmethod
+    def _no_blank_redirect_hosts(cls, value: list[str]) -> list[str]:
+        cleaned = [host.strip().lower() for host in value]
+        if any(not host for host in cleaned):
+            raise ValueError("allowed_redirect_hosts entries must be non-empty")
+        return cleaned
+
+    def resolve_credentials(self) -> tuple[str, str] | None:
+        """(username, password) from env first, then the config file."""
+        username = os.environ.get(self.username_env) or self.username
+        password = os.environ.get(self.password_env) or self.password
+        if not username or not password:
+            return None
+        return username, password
+
+
 class HttpServerConfig(BaseModel):
     """Settings for the Streamable-HTTP MCP transport (`serve-http`).
 
     The stdio server needs no listener and no auth of its own; the HTTP
     transport does, because it has a socket. It binds loopback by default and
-    refuses to start unless a bearer token is resolvable — the reverse proxy
-    in front of it only routes and strips, it never authenticates.
+    refuses to start unless a gate is configured — OAuth 2.1 by default
+    (`http.oauth`), the static bearer token only when OAuth is switched off
+    or listed as a fallback. The reverse proxy in front of it only routes and
+    strips, it never authenticates.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -129,6 +214,11 @@ class HttpServerConfig(BaseModel):
     token_env: str = "HERMES_TOOLKIT_MCP_HTTP_TOKEN"
     # Direct token for a secure local file; the env var wins when both are set.
     token: str | None = None
+    # Accept the legacy static bearer token in addition to OAuth. Default
+    # false = OAuth only; the "OAuth only or both?" question is this one line.
+    # When http.oauth.enabled is false the static token is the gate itself.
+    bearer_fallback: bool = False
+    oauth: OAuthServerConfig = Field(default_factory=OAuthServerConfig)
     # Stateless keeps a fresh transport per request: no session table to leak
     # or grow, and Traefik never needs session affinity. JSON responses avoid
     # long-lived SSE streams through the proxy.
@@ -319,6 +409,14 @@ class ToolkitMcpConfig(BaseModel):
             "artifact_root": str(self.artifacts.root),
             "policy_mode": self.policy.mode.value,
             "allowed_toolsets": list(self.policy.allowed_toolsets),
+            # Presence only: the issuer is public, the credential is not —
+            # neither username nor password may appear here (INFRA-33).
+            "oauth_enabled": self.http.oauth.enabled,
+            "oauth_issuer": self.http.oauth.issuer,
+            "oauth_scopes": list(self.http.oauth.scopes),
+            "oauth_credentials_configured": self.http.oauth.resolve_credentials() is not None,
+            "bearer_fallback": self.http.bearer_fallback,
+            "http_token_present": bool(self.http.resolve_token()),
         }
 
 
