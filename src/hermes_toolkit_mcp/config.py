@@ -141,9 +141,6 @@ class OAuthServerConfig(BaseModel):
     password: str | None = None
     scopes: list[str] = Field(default_factory=lambda: ["mcp"])
     allow_dynamic_client_registration: bool = True
-    # Extra https hosts accepted as registered redirect URIs besides the
-    # loopback-http and any-https default policy.
-    allowed_redirect_hosts: list[str] = Field(default_factory=list)
     access_token_ttl_seconds: PositiveInt = 3_600
     refresh_token_ttl_seconds: PositiveInt = 2_592_000
     authorization_code_ttl_seconds: PositiveInt = 300
@@ -175,14 +172,6 @@ class OAuthServerConfig(BaseModel):
             raise ValueError("http.oauth.scopes must be a non-empty list of scopes")
         if len(set(cleaned)) != len(cleaned):
             raise ValueError("http.oauth.scopes must not repeat a scope")
-        return cleaned
-
-    @field_validator("allowed_redirect_hosts")
-    @classmethod
-    def _no_blank_redirect_hosts(cls, value: list[str]) -> list[str]:
-        cleaned = [host.strip().lower() for host in value]
-        if any(not host for host in cleaned):
-            raise ValueError("allowed_redirect_hosts entries must be non-empty")
         return cleaned
 
     def resolve_credentials(self) -> tuple[str, str] | None:

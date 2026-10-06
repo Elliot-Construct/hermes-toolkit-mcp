@@ -60,8 +60,10 @@ fallbacks, `mcp.client.auth.utils`):
 3. Dynamic client registration (RFC 7591) **enabled**: `POST {issuer}/register`.
 4. Redirect URI policy at registration (anti open-redirect): `https` on any
    host, **or** `http` on a loopback host (`localhost`, `127.0.0.1`, `[::1]`).
-   Anything else → `invalid_redirect_uri`. Extra https hosts can be listed in
-   `http.oauth.allowed_redirect_hosts`. No fragments, no `+`/space in scheme.
+   Anything else → `invalid_redirect_uri`. There is deliberately no allow-list
+   knob: https already covers every remote client, and permitting plain http
+   anywhere else would put an authorization code on the wire. No fragments,
+   no userinfo, no custom schemes.
 5. Single user (Elliot). One login form, no consent theater: the form shows the
    requesting client's name and scopes so a phished click is visible as such.
 6. Scopes: exactly `["mcp"]`. Registered clients get it as default; the RS
@@ -85,7 +87,6 @@ http:
     password: "…"             # or password_env (env wins); never logged, never in safe_summary
     scopes: ["mcp"]
     allow_dynamic_client_registration: true
-    allowed_redirect_hosts: []          # extra https hosts allowed as redirect URIs
     access_token_ttl_seconds: 3600
     refresh_token_ttl_seconds: 2592000
     authorization_code_ttl_seconds: 300

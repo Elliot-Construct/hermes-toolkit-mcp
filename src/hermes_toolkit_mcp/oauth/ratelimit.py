@@ -62,15 +62,21 @@ class SlidingWindowLimiter:
 
 
 def client_key(request: Request) -> str:
-    """Coarse caller identity: the address Traefik recorded for us.
+    """Coarse caller identity: the address the reverse proxy recorded for us.
 
-    Traefik is the only thing that can reach this loopback listener, so the
-    first ``X-Forwarded-For`` entry it wrote is the real client; a direct
-    loopback caller without the header falls back to its own address.
+    Traefik is the only thing that can reach this loopback listener, and on
+    this box it runs with the default trust-all ``forwardedHeaders``, which
+    *appends* the address it saw to any ``X-Forwarded-For`` the caller already
+    sent. So the first entry is the caller's own claim — spoofable, and with
+    it the rate-limit bucket — while the **last** entry is the one Traefik
+    wrote. Take the last, fall back to the socket peer when the header is
+    absent (direct loopback callers, tests).
     """
     forwarded = request.headers.get("x-forwarded-for", "")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        last = forwarded.split(",")[-1].strip()
+        if last:
+            return last
     if request.client:
         return request.client.host
     return "unknown"

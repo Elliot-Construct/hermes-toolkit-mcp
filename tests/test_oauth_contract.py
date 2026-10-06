@@ -155,6 +155,78 @@ def test_missing_credentials_resolve_to_none() -> None:
     assert _config({}).http.oauth.resolve_credentials() is None
 
 
+# --- caller identity behind the proxy (contract §5 rate limits) --------------
+
+
+def _request(headers: dict[str, str], client: tuple[str, int] = ("10.0.0.9", 1234)):  # noqa: ANN202
+    from starlette.requests import Request
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/login",
+        "query_string": b"",
+        "headers": [(key.encode("ascii"), value.encode("ascii")) for key, value in headers.items()],
+        "client": client,
+    }
+    return Request(scope)
+
+
+def test_rate_limit_key_is_the_proxy_appended_address_not_the_caller_claim() -> None:
+    """Traefik appends to X-Forwarded-For, so the last entry is the real caller.
+
+    Taking the first would let a caller pick its own rate-limit bucket (or
+    burn someone else's) by prepending a header value.
+    """
+    from hermes_toolkit_mcp.oauth.ratelimit import client_key
+
+    spoofed = _request({"x-forwarded-for": "1.2.3.4, 203.0.113.9"})
+    assert client_key(spoofed) == "203.0.113.9"
+
+    single = _request({"x-forwarded-for": "198.51.100.2"})
+    assert client_key(single) == "198.51.100.2"
+
+    # direct loopback caller (no proxy): the socket peer
+    assert client_key(_request({})) == "10.0.0.9"
+
+    # a trailing empty entry must never become the bucket key: fall back to
+    # the socket peer rather than to a value the caller chose
+    trailing = _request({"x-forwarded-for": "198.51.100.2, "})
+    assert client_key(trailing) == "10.0.0.9"
+
+
+def test_sliding_window_limiter_counts_attempts_and_reports_retry_after() -> None:
+    from hermes_toolkit_mcp.oauth.ratelimit import SlidingWindowLimiter
+
+    limiter = SlidingWindowLimiter(limit=3, window_seconds=60.0)
+    assert [limiter.allow("k", now=0.0) for _ in range(3)] == [True, True, True]
+    assert limiter.allow("k", now=0.0) is False
+    assert limiter.retry_after("k", now=0.0) == 60
+    # the window slides: after it ages out the caller is allowed again
+    assert limiter.allow("k", now=61.0) is True
+    # other keys are unaffected
+    assert limiter.allow("other", now=0.0) is True
+
+
+def test_ttl_map_takes_are_single_use_and_bounded() -> None:
+    import time
+
+    from hermes_toolkit_mcp.oauth.state import TtlMap
+
+    store: TtlMap[str] = TtlMap(name="codes", max_entries=2)
+    now = time.time()
+    store.set("a", "A", 10, now=now)
+    assert store.take("a", now=now) == "A"
+    assert store.take("a", now=now) is None, "single-use: a second read must miss"
+    store.set("b", "B", 10, now=now)
+    store.set("c", "C", 10, now=now)
+    store.set("d", "D", 10, now=now)
+    assert len(store) == 2, "hard cap holds even for fresh writes"
+    assert store.get("expired", now=now) is None
+    store.set("e", "E", 1, now=now)
+    assert store.get("e", now=now + 2) is None, "TTL expiry"
+
+
 # --- contract document itself -----------------------------------------------
 
 
