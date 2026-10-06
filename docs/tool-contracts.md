@@ -27,9 +27,15 @@ multiplex-mirrored `/v1` wrapper takes it — Runs, chat completions, responses,
 models, skills and toolsets. The routing argument is excluded from the request
 body, so it can never be serialised where the server would ignore it.
 
+The default home is **not** a profile you name: omit the argument, and the request
+takes the bare path with the process credential. `hermes.hidden_profiles`
+(default `["default", "public-receptionist"]`) lists profiles that are neither
+selectable nor surfaced — never listed by `hermes_profiles_list`, never routable,
+even with a usable key on disk. Naming one is `PROFILE_NOT_SELECTABLE`.
+
 | `profile` argument | Path sent | Credential |
 |---|---|---|
-| absent, or the configured default profile | `/v1/…` | the process's `hermes.api.api_key_env` |
+| omitted | `/v1/…` | the process's `hermes.api.api_key_env` |
 | a named profile (`arthur`) | `/p/arthur/v1/…` | `API_SERVER_KEY` read from `<root>/profiles/arthur/.env` |
 
 The key name is always `API_SERVER_KEY`; the gateway resolves a profile's credential through `agent.secret_scope` under that name, so there is no `<PROFILE>_API_SERVER_KEY` convention. The profile's key is read from its own file and nowhere else — profile A's key can never authenticate a call addressed to profile B.
@@ -42,8 +48,9 @@ Failures are distinct and actionable rather than a generic status code:
 | `PROFILE_KEY_UNAUTHORIZED` | the gateway answered 401 for the profile's credential. |
 | `PROFILE_NOT_SERVED` | the gateway answered 404: it does not multiplex that profile (a single-profile gateway 404s every `/p/<other>/` prefix, as does a parked profile). |
 | `PROFILE_NOT_ROUTABLE` | the route has no multiplex mirror, so the argument is refused rather than sent in a body where it would not route. |
+| `PROFILE_NOT_SELECTABLE` | the named profile is withheld (`hermes.hidden_profiles`). Omit the argument to use the default home. |
 
-Request receipts record a `profile_routing` block (`profile`, `profiled`, `route_prefix`, `credential_source`, `key_name`, `key_env_path`, `credential_present`). Presence and names only — no key value appears in any receipt, envelope, log line or git object.
+Request receipts record a `profile_routing` block (`profile`, `profiled`, `route_prefix`, `credential_source`, `key_name`, `key_env_path`, `credential_present`). Presence and names only — no key value appears in any receipt, envelope, log line or git object. `profile` is `null` for an unprofiled request: the default home is the *absence* of a profile, so it is never named.
 
 ## Shared output envelope
 

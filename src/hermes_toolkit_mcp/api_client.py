@@ -191,8 +191,11 @@ class _ProfileRouting:
 
     #: The path actually sent, profile prefix included.
     path: str
-    #: The profile this request is addressed to (normalized).
-    profile: str
+    #: The profile this request is addressed to, or ``None`` when the request is
+    #: unprofiled (the default home). The default is deliberately not named: it
+    #: is the absence of a profile, not a profile id, and naming it in a receipt
+    #: would surface a selector the toolkit does not accept.
+    profile: str | None
     #: True when the path carries the multiplex prefix and the credential is
     #: the profile's own; False for the default profile's bare path.
     is_profiled: bool
@@ -514,7 +517,7 @@ class HermesApiClient:
         if profile is None:
             return _ProfileRouting(
                 path=request_path,
-                profile=default_profile,
+                profile=None,
                 is_profiled=False,
                 # Origin-routed: a registry path takes the a2aorch token, an API
                 # path takes the Hermes key. Only a *named* profile overrides
@@ -526,13 +529,23 @@ class HermesApiClient:
             )
 
         normalized = normalize_profile(profile)
+        if self.config.hermes.is_hidden_profile(normalized):
+            # Withheld profiles are not addressable by name, on any path. The
+            # default home is reached by OMITTING the argument (handled above),
+            # so refusing the name keeps exactly one way to say it.
+            raise HermesApiClientError(
+                "PROFILE_NOT_SELECTABLE",
+                f"profile '{normalized}' is not a selectable profile; "
+                "omit the profile argument to use the default home",
+            )
+
         if normalized == default_profile:
-            # An explicit ask for the default is the default: same path, same
-            # key, same receipts. Anything else would be a behaviour change
-            # hidden behind a redundant argument.
+            # A deployment whose default profile is a *named* one still reaches it
+            # by name; it resolves to the same unprofiled request, and the receipt
+            # names no profile, so the default never surfaces as a selector.
             return _ProfileRouting(
                 path=request_path,
-                profile=default_profile,
+                profile=None,
                 is_profiled=False,
                 credential=self._credential_for_path(request_path),
                 key_name=api.api_key_env,

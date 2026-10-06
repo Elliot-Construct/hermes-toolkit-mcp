@@ -19,7 +19,12 @@ FAKE_HOME = FIXTURE_ROOT / "fake_hermes_home"
 FAKE_TOOLKIT = FIXTURE_ROOT / "fake_toolkit"
 
 
-def _config(tmp_path: Path, *, home: Path = FAKE_HOME, toolkit: Path = FAKE_TOOLKIT) -> ToolkitMcpConfig:
+def _config(
+    tmp_path: Path,
+    *,
+    home: Path = FAKE_HOME,
+    toolkit: Path = FAKE_TOOLKIT,
+) -> ToolkitMcpConfig:
     return ToolkitMcpConfig.from_mapping(
         {
             "hermes": {
@@ -79,12 +84,75 @@ def test_toolkit_info_lists_fixture_skill_and_readme_hash(tmp_path: Path) -> Non
     assert result["readme"]["sha256"] is not None
 
 
-def test_profiles_list_reports_default_profile_surfaces(tmp_path: Path) -> None:
-    result = hermes_profiles_list(_config(tmp_path))
+def test_profiles_list_omits_default_and_hidden_profiles(tmp_path: Path) -> None:
+    """Neither the default home nor a withheld profile is surfaced.
 
-    default = next(profile for profile in result["profiles"] if profile["name"] == "default")
-    assert default["config_exists"] is True
-    assert default["profile_config_exists"] is True
+    The default is the root home, not a profile you address, and
+    ``public-receptionist`` is a public-facing bot that is not operator-addressable.
+    The default home's own surfaces are still reported under ``scope``.
+    """
+
+    home = tmp_path / "home"
+    (home / "profiles" / "arthur").mkdir(parents=True)
+    (home / "profiles" / "public-receptionist").mkdir(parents=True)
+    (home / "config.yaml").write_text("gateway:\n  multiplex_profiles: true\n", encoding="utf-8")
+
+    result = hermes_profiles_list(_config(tmp_path, home=home))
+
+    names = [profile["name"] for profile in result["profiles"]]
+    assert "default" not in names
+    assert "public-receptionist" not in names
+    assert names == ["arthur"]
+    # No `is_default` flag leaks the concept either.
+    assert all("is_default" not in profile for profile in result["profiles"])
+    # The default home is still described by the scope block.
+    assert result["scope"]["home"]
+
+
+def test_profiles_list_never_invents_a_default_entry(tmp_path: Path) -> None:
+    """A home with no named profiles lists nothing, rather than a phantom `default`."""
+
+    home = tmp_path / "home"
+    home.mkdir()
+    result = hermes_profiles_list(_config(tmp_path, home=home))
+    assert result["profiles"] == []
+    assert result["count"] == 0
+
+
+def test_selecting_a_hidden_profile_by_name_is_refused(tmp_path: Path) -> None:
+    """Hidden profiles are not selectable: omit the argument instead."""
+
+    home = tmp_path / "home"
+    home.mkdir()
+    config = _config(tmp_path, home=home)
+
+    for hidden in ("default", "public-receptionist", "Public-Receptionist"):
+        result = asyncio.run(execute_tool("hermes_profiles_list", {"profile": hidden}, config))
+        assert result["ok"] is False, result
+        assert result["error_code"] == "PROFILE_NOT_SELECTABLE"
+
+
+def test_hidden_profiles_are_configurable(tmp_path: Path) -> None:
+    """A deployment can widen or narrow the withheld set."""
+
+    home = tmp_path / "home"
+    (home / "profiles" / "arthur").mkdir(parents=True)
+    (home / "profiles" / "vera").mkdir(parents=True)
+    config = ToolkitMcpConfig.from_mapping(
+        {
+            "hermes": {
+                "homes": {"default": str(home)},
+                "default_profile": "default",
+                "hidden_profiles": ["default"],
+            },
+            "toolkit": {"root": str(tmp_path / "toolkit")},
+            "artifacts": {"root": str(tmp_path / "artifacts")},
+            "policy": {"mode": "read_only", "allowed_paths": [str(tmp_path)]},
+        }
+    )
+
+    names = [profile["name"] for profile in hermes_profiles_list(config)["profiles"]]
+    assert names == ["arthur", "vera"]
 
 
 def test_config_summary_redacts_secret_values(tmp_path: Path) -> None:

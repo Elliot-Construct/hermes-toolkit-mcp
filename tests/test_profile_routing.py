@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -342,10 +344,10 @@ def test_runs_start_without_profile_is_unchanged(
     assert call["body"] == {"input": "hello"}
 
 
-def test_runs_start_with_default_profile_explicitly_is_unchanged(
+def test_runs_start_with_default_profile_explicitly_is_refused(
     tmp_path: Path, gateway: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An explicit ask for the default profile is the default, not a prefixed path."""
+    """``default`` is not a selectable name; omission is the only way to say it."""
 
     root = tmp_path / "home"
     root.mkdir(exist_ok=True)
@@ -357,10 +359,9 @@ def test_runs_start_with_default_profile_explicitly_is_unchanged(
         _config(tmp_path, api_base_url=gateway, home=root),
     )
 
-    assert result["ok"] is True, result
-    call = _ProfileAwareHandler.calls[-1]
-    assert call["path"] == "/v1/runs"
-    assert call["headers"]["Authorization"] == f"Bearer {DEFAULT_KEY}"
+    assert result["ok"] is False
+    assert result["error_code"] == "PROFILE_NOT_SELECTABLE"
+    assert _ProfileAwareHandler.calls == [], "no request may be sent when naming the default"
 
 
 def test_runs_start_profile_is_lowercased_like_the_gateway(
@@ -674,7 +675,7 @@ def test_default_profile_receipt_records_process_env_routing(
     artifact_dir = Path(result["artifact_dir"])
     request_receipt = json.loads((artifact_dir / "request-receipt.json").read_text(encoding="utf-8"))
     assert request_receipt["profile_routing"] == {
-        "profile": "default",
+        "profile": None,
         "profiled": False,
         "route_prefix": None,
         "credential_source": "process_env",
@@ -686,8 +687,102 @@ def test_default_profile_receipt_records_process_env_routing(
 
 
 # ---------------------------------------------------------------------------
+# Hidden profiles: never selectable, never routable
+# ---------------------------------------------------------------------------
+
+
+def test_hidden_profile_is_not_routable(tmp_path: Path, gateway: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A withheld profile is refused, even when it has a usable key on disk."""
+
+    root = tmp_path / "home"
+    root.mkdir(exist_ok=True)
+    _write_profile_key(root, "public-receptionist", "tk-" + "P" * 32)
+    monkeypatch.setenv("HERMES_TOOLKIT_TEST_API_KEY", DEFAULT_KEY)
+
+    result = _run_tool(
+        "hermes_api_runs_start",
+        {"prompt": "hello", "profile": "public-receptionist"},
+        _config(tmp_path, api_base_url=gateway, home=root),
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "PROFILE_NOT_SELECTABLE"
+    assert _ProfileAwareHandler.calls == [], "no request may be sent for a withheld profile"
+
+
+def test_default_is_addressed_by_omission_not_by_name(
+    tmp_path: Path, gateway: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Omission means the default; naming it is refused.
+
+    ``default`` is the root home, not a profile id you route to. There is exactly
+    one way to say "the default": leave the argument out.
+    """
+
+    root = tmp_path / "home"
+    root.mkdir(exist_ok=True)
+    monkeypatch.setenv("HERMES_TOOLKIT_TEST_API_KEY", DEFAULT_KEY)
+    config = _config(tmp_path, api_base_url=gateway, home=root)
+
+    omitted = _run_tool("hermes_api_runs_start", {"prompt": "hello"}, config)
+    assert omitted["ok"] is True, omitted
+    assert _ProfileAwareHandler.calls[-1]["path"] == "/v1/runs"
+    assert _ProfileAwareHandler.calls[-1]["headers"]["Authorization"] == f"Bearer {DEFAULT_KEY}"
+
+    # No receipt ever claims a profiled route for the default.
+    receipt = json.loads((Path(omitted["artifact_dir"]) / "request-receipt.json").read_text(encoding="utf-8"))
+    assert receipt["profile_routing"]["profiled"] is False
+    assert receipt["profile_routing"]["route_prefix"] is None
+
+
+def test_hidden_profile_is_not_listed_or_selectable(tmp_path: Path) -> None:
+    """``hermes_profiles_list`` omits it and refuses it as a selector."""
+
+    from hermes_toolkit_mcp.discovery import hermes_profiles_list
+
+    root = tmp_path / "home"
+    (root / "profiles" / "arthur").mkdir(parents=True)
+    (root / "profiles" / "public-receptionist").mkdir(parents=True)
+    config = _config(tmp_path, home=root)
+
+    names = [profile["name"] for profile in hermes_profiles_list(config)["profiles"]]
+    assert names == ["arthur"]
+    assert "default" not in names
+    assert "public-receptionist" not in names
+
+
+# ---------------------------------------------------------------------------
 # Layout: the profile home the client computes matches the gateway's
 # ---------------------------------------------------------------------------
+
+
+def test_default_hermes_root_mirrors_the_gateway_platform_rule() -> None:
+    """The zero-config default must agree with hermes-agent, not guess.
+
+    A wrong default resolves every profile-scoped credential lookup to a
+    directory that does not exist, and the resulting failure looks like a
+    missing key rather than a misconfigured home.
+    """
+
+    from hermes_toolkit_mcp.config import default_hermes_root
+
+    root = default_hermes_root()
+    if sys.platform == "win32":
+        # hermes_constants._get_platform_default_hermes_home(): %LOCALAPPDATA%/hermes
+        assert root.name == "hermes"
+        assert root.parent == Path(os.environ["LOCALAPPDATA"])
+    else:
+        assert root == Path.home() / ".hermes"
+    assert root == ToolkitMcpConfig().hermes.root_home()
+
+
+def test_hermes_data_dir_suffix_is_honoured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``HERMES_DATA_DIR_SUFFIX`` moves the root for both implementations."""
+
+    from hermes_toolkit_mcp.config import default_hermes_root
+
+    monkeypatch.setenv("HERMES_DATA_DIR_SUFFIX", "-test")
+    assert default_hermes_root().name.endswith("-test")
 
 
 def test_profile_env_path_uses_the_profiles_layout(tmp_path: Path) -> None:

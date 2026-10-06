@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from .config import ToolkitMcpConfig
+from .config import ToolkitMcpConfig, default_hermes_root
 from .paths import ConfiguredPathState, PathContainmentError, ensure_path_contained, is_relative_to, resolve_configured_path, resolve_path
 from .redaction import redact_mapping, redact_text
 
@@ -162,11 +162,22 @@ def resolve_scope(config: ToolkitMcpConfig, arguments: dict[str, Any] | None = N
     args = arguments or {}
     allowed_roots = config.allowed_roots()
 
-    profile = str(args.get("profile") or config.hermes.default_profile)
+    raw_profile = args.get("profile")
+    explicitly_named = raw_profile is not None and str(raw_profile).strip() != ""
+    profile = str(raw_profile) if explicitly_named else config.hermes.default_profile
     if not profile or "/" in profile or ".." in profile:
         raise DiscoveryError("SCHEMA_INVALID", "profile must be a simple profile name")
+    if explicitly_named and config.hermes.is_hidden_profile(profile):
+        # A hidden profile is never selectable BY NAME. The default home is
+        # addressed by OMITTING the argument (it is the fallback below), and a
+        # public-facing bot is not an operator-addressable profile at all.
+        raise DiscoveryError(
+            "PROFILE_NOT_SELECTABLE",
+            f"profile '{profile.strip().lower()}' is not a selectable profile; "
+            "omit the profile argument to use the default home",
+        )
 
-    raw_home = args.get("home") or config.hermes.homes.get("default") or Path.home() / ".hermes"
+    raw_home = args.get("home") or config.hermes.homes.get("default") or default_hermes_root()
     try:
         home = ensure_path_contained(raw_home, allowed_roots)
     except PathContainmentError as exc:
@@ -360,12 +371,21 @@ def hermes_toolkit_info(config: ToolkitMcpConfig, arguments: dict[str, Any] | No
 
 
 def hermes_profiles_list(config: ToolkitMcpConfig, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """List the operator-addressable profiles.
+
+    Hidden profiles (``hermes.hidden_profiles``) are omitted: the default is the
+    root home rather than a profile you address, and a public-facing bot is not
+    an operator-addressable profile. The default home's own surfaces are still
+    reported under ``scope``.
+    """
+
     scope = resolve_scope(config, arguments)
     home = Path(scope["home"])
     profiles_root = home / "profiles"
-    names = {"default"}
+    names: set[str] = set()
     if profiles_root.is_dir():
         names.update(path.name for path in profiles_root.iterdir() if path.is_dir() and not path.name.startswith("."))
+    names = set(config.hermes.selectable_profiles(sorted(names)))
 
     profiles: list[dict[str, Any]] = []
     for name in sorted(names):
@@ -375,9 +395,8 @@ def hermes_profiles_list(config: ToolkitMcpConfig, arguments: dict[str, Any] | N
                 "name": name,
                 "home": str(home),
                 "path": str(resolve_path(profile_path)),
-                "is_default": name == "default",
                 "exists": profile_path.exists(),
-                "config_exists": (profile_path / "config.yaml").exists() if name != "default" else (home / "config.yaml").exists(),
+                "config_exists": (profile_path / "config.yaml").exists(),
                 "profile_config_exists": (home / "profiles" / name / "config.yaml").exists(),
                 "memory_dir_exists": (profile_path / "memories").is_dir(),
                 "skills_dir_exists": (profile_path / "skills").is_dir(),

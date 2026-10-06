@@ -33,6 +33,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- **The default home is no longer a profile you name, and some profiles are
+  withheld entirely.** `hermes.hidden_profiles` (default
+  `["default", "public-receptionist"]`) lists profiles that are neither
+  *selectable* nor *surfaced*:
+  - `hermes_profiles_list` omits them (it no longer emits a synthetic `default`
+    entry, and the `is_default` flag is gone);
+  - passing one as `profile` is refused as `PROFILE_NOT_SELECTABLE`, on both the
+    discovery tools and the API wrappers;
+  - a withheld profile is refused even when it has a usable `API_SERVER_KEY` on
+    disk, so it cannot be reached by guessing a name.
+  The default home is addressed by **omitting** the argument — bare path, process
+  credential — and request receipts record `profile: null` for it, so the
+  default never appears as a selector anywhere.
+
+- **The zero-config `hermes.homes.default` now matches hermes-agent.**
+  `default_hermes_root()` mirrors `hermes_constants` (`%LOCALAPPDATA%/hermes` on
+  Windows, `~/.hermes` elsewhere, honouring `HERMES_DATA_DIR_SUFFIX`) instead of
+  assuming `~/.hermes`. The old default resolved every profile-scoped credential
+  lookup to a directory that does not exist on Windows, so a correctly-configured
+  profile read as "no key".
+
 - **`profile` extended to the rest of the multiplex-mirrored `/v1` surface.**
   `hermes_api_chat_completions`, `hermes_api_responses_create` / `_get` /
   `_delete`, `hermes_api_models_list`, `hermes_api_skills_list` and

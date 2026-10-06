@@ -60,6 +60,13 @@ The reader never touches `os.environ`: the process environment holds the default
 profile's credential, so consulting it for a named profile would let one
 profile's key authenticate a call addressed to another.
 
+The default home is **not** a profile you name. It is the absence of a profile —
+bare path, process credential — and receipts record `profile: null` for it.
+`hermes.hidden_profiles` (default `["default", "public-receptionist"]`) withholds
+profiles from both listing and routing: a withheld profile cannot be selected by
+name even when a usable key exists on disk, so a name guess cannot reach a
+public-facing bot's isolated toolset.
+
 Fail-closed rules:
 
 - a missing or too-short profile key is refused locally (`PROFILE_KEY_MISSING`);
@@ -69,6 +76,7 @@ Fail-closed rules:
 - a profile that cannot be expressed in the route's URL is refused
   (`PROFILE_NOT_ROUTABLE`) rather than serialized into the body, where the
   server would accept and ignore it;
+- a withheld profile is refused (`PROFILE_NOT_SELECTABLE`) before any request;
 - receipts record the credential *source* (`process_env` / `profile_env`), the
   key name, the `.env` path and a presence boolean — never the value. A test
   asserts no resolved key appears in any receipt, envelope or manifest.

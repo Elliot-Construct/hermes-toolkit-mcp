@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import urlsplit
 
 import yaml
@@ -13,6 +14,25 @@ from .policy import PolicyTier
 
 def _expand_path(value: str | Path) -> Path:
     return Path(value).expanduser()
+
+
+def default_hermes_root() -> Path:
+    """The platform default hermes root, mirroring hermes-agent's own rule.
+
+    ``hermes_constants._get_platform_default_hermes_home()`` puts the root at
+    ``%LOCALAPPDATA%/hermes`` on Windows and ``~/.hermes`` elsewhere (honouring
+    ``HERMES_DATA_DIR_SUFFIX``). The toolkit must agree with it: a wrong default
+    makes every profile-scoped credential lookup resolve to a directory that
+    does not exist, and the resulting failure looks like a missing key rather
+    than a misconfigured home.
+    """
+
+    suffix = os.environ.get("HERMES_DATA_DIR_SUFFIX", "")
+    if sys.platform == "win32":
+        local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+        base = Path(local_appdata) if local_appdata else Path.home() / "AppData" / "Local"
+        return base / f"hermes{suffix}"
+    return Path.home() / f".hermes{suffix}"
 
 
 class ApiDocsConfig(BaseModel):
@@ -306,8 +326,17 @@ class HttpServerConfig(BaseModel):
 class HermesConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    homes: dict[str, Path] = Field(default_factory=lambda: {"default": Path.home() / ".hermes"})
+    homes: dict[str, Path] = Field(default_factory=lambda: {"default": default_hermes_root()})
     default_profile: str = "default"
+    #: Profile ids that must never be *selectable* or *surfaced* by this toolkit.
+    #:
+    #: ``default`` is the root home, not a profile you address: the API wrappers
+    #: express it as the ABSENCE of a ``profile`` argument (bare path, process
+    #: credential), so accepting it by name would add a second, ambiguous way to
+    #: say the same thing. ``public-receptionist`` is a public-facing bot whose
+    #: toolset is deliberately isolated; it is not an operator-addressable profile
+    #: and must not appear in listings or be routable.
+    hidden_profiles: list[str] = Field(default_factory=lambda: ["default", "public-receptionist"])
     cli: Path = Path("hermes")
     api: HermesApiConfig = Field(default_factory=HermesApiConfig)
     fallback: HermesFallbackConfig = Field(default_factory=HermesFallbackConfig)
@@ -324,6 +353,28 @@ class HermesConfig(BaseModel):
     def _cli(cls, value: str | Path) -> Path:
         return _expand_path(value)
 
+    @field_validator("hidden_profiles")
+    @classmethod
+    def _normalized_hidden(cls, value: list[str]) -> list[str]:
+        # Lowercased and de-duplicated so the check is a set membership test on
+        # the same normalization every caller applies to a profile id.
+        seen: list[str] = []
+        for name in value:
+            normalized = str(name).strip().lower()
+            if normalized and normalized not in seen:
+                seen.append(normalized)
+        return seen
+
+    def is_hidden_profile(self, profile: str) -> bool:
+        """True when *profile* may neither be selected nor surfaced."""
+
+        return isinstance(profile, str) and profile.strip().lower() in self.hidden_profiles
+
+    def selectable_profiles(self, names: Iterable[str]) -> list[str]:
+        """Filter a profile listing down to the operator-addressable names."""
+
+        return [name for name in names if not self.is_hidden_profile(name)]
+
     def root_home(self) -> Path:
         """The hermes root home — the directory ``profiles/`` sits under.
 
@@ -334,7 +385,7 @@ class HermesConfig(BaseModel):
         that only knows its own home still finds its siblings.
         """
 
-        configured = self.homes.get(self.default_profile) or self.homes.get("default") or Path.home() / ".hermes"
+        configured = self.homes.get(self.default_profile) or self.homes.get("default") or default_hermes_root()
         candidate = Path(configured).expanduser()
         # A configured home that already names a profile (…/profiles/<name>) is
         # not the root; its parent's parent is. Checked against the directory
@@ -456,6 +507,7 @@ class ToolkitMcpConfig(BaseModel):
     def safe_summary(self) -> dict[str, Any]:
         return {
             "default_profile": self.hermes.default_profile,
+            "hidden_profiles": list(self.hermes.hidden_profiles),
             "homes": sorted(self.hermes.homes.keys()),
             "cli": str(self.hermes.cli),
             "api_base_url": self.hermes.api.base_url,

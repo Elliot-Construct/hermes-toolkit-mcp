@@ -192,6 +192,17 @@ Every multiplex-mirrored `/v1` wrapper takes the same argument:
 mirror, so a `profile` argument there is refused (`PROFILE_NOT_ROUTABLE`) rather
 than sent in a body where it would not route.
 
+**The default home is not a profile you name.** Omit `profile` to address it; the
+request goes to the bare path with the process credential, and no receipt records
+a profile for it. Naming `default` is refused (`PROFILE_NOT_SELECTABLE`), so there
+is exactly one way to say it.
+
+Some profiles are withheld entirely — `hermes.hidden_profiles` (default:
+`default` and `public-receptionist`). A withheld profile is never listed by
+`hermes_profiles_list` and never routable, even when it has a usable key on disk.
+`public-receptionist` is a public-facing bot whose toolset is deliberately
+isolated; it is not an operator-addressable profile.
+
 `profile` absent (or naming the configured default) keeps the bare path and the
 process credential exactly as before. A named profile's key is read from
 `<root>/profiles/<profile>/.env`; if it is missing or too short the call is
@@ -203,6 +214,7 @@ gateway does not serve that profile — a single-profile gateway 404s every
 ```yaml
 hermes:
   default_profile: default
+  hidden_profiles: ["default", "public-receptionist"]   # never selectable, never listed
   api:
     base_url: "http://127.0.0.1:8642/v1"
     api_key_env: API_SERVER_KEY   # the default profile's credential

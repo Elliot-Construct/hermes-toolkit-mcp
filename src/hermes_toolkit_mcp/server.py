@@ -209,7 +209,10 @@ COMMON_INPUT_SCHEMA: dict[str, Any] = {
         },
         "profile": {
             "type": "string",
-            "description": "Optional Hermes profile name. Defaults to configured default_profile.",
+            "description": (
+                "Optional Hermes profile to read from. Omit to use the default home. The default "
+                "and any other withheld profile are not selectable by name."
+            ),
             "pattern": "^[A-Za-z0-9_.-]+$",
         },
         "toolkit_root": {
@@ -1169,7 +1172,14 @@ def _success_envelope(
     data: dict[str, Any],
     started_at: float,
 ) -> dict[str, Any]:
-    scope = safe_scope_summary(resolve_scope(config, arguments))
+    # The handler may have refused a scope argument the tool itself accepts at a
+    # wider tier (a withheld profile, an outside-root path). Re-resolving here
+    # would raise on the SUCCESS path and turn a deliberate, actionable refusal
+    # into an INTERNAL_ERROR, so fall back to the configuration summary.
+    try:
+        scope = safe_scope_summary(resolve_scope(config, arguments))
+    except Exception:
+        scope = config.safe_summary()
     warnings = data.get("warnings", []) if isinstance(data.get("warnings"), list) else []
     evidence = data.get("evidence", []) if isinstance(data.get("evidence"), list) else []
     verdict = data.get("verdict") if data.get("verdict") in {"pass", "fail", "degraded", "blocked", "skipped", "unknown"} else "pass"
