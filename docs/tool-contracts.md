@@ -18,6 +18,30 @@ M1 exposes read-only local discovery tools. M2a adds bundled API-server document
 
 Path arguments must resolve under configured allowed roots. Unknown profiles, outside-root paths, and schema-broadening inputs fail closed through either MCP input validation or a structured `PATH_DENIED` / `SCHEMA_INVALID` envelope.
 
+## Profile routing (Hermes API surface)
+
+Under a multiplexed gateway every native route is mounted twice — `{path}` and `/p/{profile}{path}` — and the **URL segment**, never a request-body field, selects the profile a request runs as, including which credential authorizes it. A body `profile` is not a routing selector: the server accepts it and ignores it, so a run addressed to `arthur` through the body alone lands on the default profile with the default key.
+
+The Runs API wrappers therefore express `profile` in the URL:
+
+| `profile` argument | Path sent | Credential |
+|---|---|---|
+| absent, or the configured default profile | `/v1/runs` | the process's `hermes.api.api_key_env` |
+| a named profile (`arthur`) | `/p/arthur/v1/runs` | `API_SERVER_KEY` read from `<root>/profiles/arthur/.env` |
+
+The key name is always `API_SERVER_KEY`; the gateway resolves a profile's credential through `agent.secret_scope` under that name, so there is no `<PROFILE>_API_SERVER_KEY` convention. The profile's key is read from its own file and nowhere else — profile A's key can never authenticate a call addressed to profile B.
+
+Failures are distinct and actionable rather than a generic status code:
+
+| Code | Meaning |
+|---|---|
+| `PROFILE_KEY_MISSING` | the profile's `.env` has no usable `API_SERVER_KEY` (min 16 chars). Refused locally; the default key is never substituted. |
+| `PROFILE_KEY_UNAUTHORIZED` | the gateway answered 401 for the profile's credential. |
+| `PROFILE_NOT_SERVED` | the gateway answered 404: it does not multiplex that profile (a single-profile gateway 404s every `/p/<other>/` prefix, as does a parked profile). |
+| `PROFILE_NOT_ROUTABLE` | the route has no multiplex mirror, so the argument is refused rather than sent in a body where it would not route. |
+
+Request receipts record a `profile_routing` block (`profile`, `profiled`, `route_prefix`, `credential_source`, `key_name`, `key_env_path`, `credential_present`). Presence and names only — no key value appears in any receipt, envelope, log line or git object.
+
 ## Shared output envelope
 
 Every tool returns structured content shaped as:

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import codecs
 import hashlib
 import json
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Pattern
 
 import httpx
@@ -15,6 +17,18 @@ from .artifacts import ArtifactWriter
 from .config import ToolkitMcpConfig
 from .policy import PolicyTier, coerce_policy_tier, tier_allows
 from .redaction import redact_text
+
+#: The gateway validates a ``/p/<profile>/`` URL segment against its own id
+#: regex and lowercases it before resolving a home, so anything this client
+#: sends must survive that same normalization. Sending a segment the gateway
+#: would reject turns a caller's typo into an opaque 404, so it is refused here
+#: with the rule named instead.
+_PROFILE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+#: Multiplex routes live on the Hermes API surface only. The a2aorch registry is
+#: a separate service with its own origin and token, so a profile prefix there
+#: would address nothing.
+_PROFILE_ROUTABLE_PREFIX = "/v1"
 
 
 class RouteDeniedError(ValueError):
@@ -31,6 +45,101 @@ class HermesApiClientError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         self.code = code
         super().__init__(f"{code}: {message}")
+
+
+def normalize_profile(profile: str) -> str:
+    """Canonicalize a profile id the way the gateway does, or refuse it.
+
+    ``hermes_cli.profiles.normalize_profile_name`` lowercases and strips before
+    validation, and ``_PROFILE_ID_RE`` bounds the segment that may appear in a
+    ``/p/<profile>/`` URL. Both are mirrored here so the path this client builds
+    is byte-for-byte the one the gateway resolves.
+    """
+
+    if not isinstance(profile, str):
+        raise HermesApiClientError("PROFILE_INVALID", "profile must be a string")
+    normalized = profile.strip().lower()
+    if not _PROFILE_ID_RE.fullmatch(normalized):
+        raise HermesApiClientError(
+            "PROFILE_INVALID",
+            "profile must match the gateway's profile id rule "
+            "(lowercase alphanumeric, underscore or hyphen, 1-64 chars)",
+        )
+    return normalized
+
+
+def _decode_env_bytes(raw: bytes) -> str:
+    if raw.startswith(codecs.BOM_UTF8):
+        raw = raw[len(codecs.BOM_UTF8):]
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1")
+
+
+def _strip_inline_comment(value: str) -> str:
+    """Drop a trailing ``# comment`` that is outside quotes."""
+
+    quote = ""
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if quote:
+            if quote == '"' and char == "\\":
+                index += 2
+                continue
+            if char == quote:
+                return value[: index + 1] if value[index + 1:].lstrip().startswith("#") else value
+        elif char in ("'", '"'):
+            quote = char
+        index += 1
+    return re.split(r"\s+#", value, maxsplit=1)[0].strip()
+
+
+def _parse_env_value(raw_value: str) -> str:
+    value = raw_value.strip()
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        quoted = value[1:-1]
+        parsed: list[str] = []
+        index = 0
+        while index < len(quoted):
+            escaped = quoted[index] == "\\" and quoted[index + 1:index + 2] in ('"', "\\")
+            parsed.append(quoted[index + 1] if escaped else quoted[index])
+            index += 2 if escaped else 1
+        return "".join(parsed)
+    if len(value) >= 2 and value[0] == value[-1] == "'":
+        return value[1:-1]
+    return value
+
+
+def read_env_file(path: Path) -> dict[str, str]:
+    """Parse the ``.env`` subset Hermes writes: bare, ``'single'``, ``"double"``.
+
+    Dict only — this never touches ``os.environ``. That is the point: a named
+    profile's credential must be read from its own file and nowhere else, so
+    profile A's key can never be used to authenticate a call addressed to
+    profile B. Mirrors ``agent.secret_scope.load_env_file`` (``export`` prefix,
+    ``#`` comments, quote escapes, BOM stripped). Absent/unreadable → ``{}``.
+    """
+
+    try:
+        raw = Path(path).read_bytes()
+    except OSError:
+        # Gone or unreadable is a miss, never an exception: the caller decides
+        # whether a missing credential is fatal (it is, for a named profile).
+        return {}
+    secrets: dict[str, str] = {}
+    for raw_line in _decode_env_bytes(raw).splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        key, sep, value = line.partition("=")
+        key = key.strip()
+        if sep and key:
+            secrets[key] = _parse_env_value(_strip_inline_comment(value))
+    return secrets
 
 
 @dataclass(frozen=True)
@@ -68,6 +177,33 @@ class HermesApiResult:
     request_receipt: str
     result_receipt: str
     response_receipt: str
+
+
+@dataclass(frozen=True)
+class _ProfileRouting:
+    """Everything a request needs to reach the profile it claims to address.
+
+    Kept as one value so path, credential and receipt metadata are decided
+    together: a request that carries a ``/p/<profile>`` path but the default
+    key (or vice versa) is exactly the silent mis-routing this exists to make
+    impossible.
+    """
+
+    #: The path actually sent, profile prefix included.
+    path: str
+    #: The profile this request is addressed to (normalized).
+    profile: str
+    #: True when the path carries the multiplex prefix and the credential is
+    #: the profile's own; False for the default profile's bare path.
+    is_profiled: bool
+    #: The bearer credential to send, or ``None`` when none is configured.
+    credential: str | None
+    #: The key name the credential came from, for the receipt.
+    key_name: str
+    #: ``process_env`` (default profile) or ``profile_env`` (named profile).
+    key_source: str
+    #: The ``.env`` the credential was read from; ``None`` for the default.
+    env_path: Path | None
 
 
 def _risk_flags(method: str, endpoint: str, min_tier: PolicyTier) -> tuple[str, ...]:
@@ -245,7 +381,14 @@ def _route_path(path: str) -> str:
 
 
 class HermesApiClient:
-    """Route-table-gated httpx client for typed Hermes API and a2aorch registry calls."""
+    """Route-table-gated httpx client for typed Hermes API and a2aorch registry calls.
+
+    Profile selection is part of the **URL contract**, not the request body: a
+    named profile's path carries the gateway's ``/p/<profile>`` prefix and its
+    ``Authorization`` header carries that profile's own credential. The default
+    profile keeps the bare path and the process credential, so existing callers
+    are byte-for-byte unchanged.
+    """
 
     def __init__(self, config: ToolkitMcpConfig) -> None:
         self.config = config
@@ -258,6 +401,7 @@ class HermesApiClient:
         typed_wrapper_name: str,
         json_body: Any = None,
         headers: dict[str, str] | None = None,
+        profile: str | None = None,
     ) -> HermesApiResult:
         if not self.config.policy.allow_live_api_calls:
             raise RouteDeniedError("LIVE_API_GATE_DENIED", "live Hermes API calls require allow_live_api_calls")
@@ -268,17 +412,18 @@ class HermesApiClient:
             configured_tier=self.config.policy.mode,
             typed_wrapper_name=typed_wrapper_name,
         )
+        routing = self._resolve_profile_routing(route, profile, route_path)
         body = _json_bytes(json_body)
         self._validate_request(route, headers or {}, body)
-        url = self._url_for_path(route_path)
+        url = self._url_for_path(routing.path)
         run = ArtifactWriter(self.config.artifacts.root).start_run(
             "hermes_api_client",
             route.min_policy_tier,
             scope={"api_base_url": self.config.hermes.api.base_url, "wrapper": typed_wrapper_name},
             slug=typed_wrapper_name,
         )
-        request_headers = self._request_headers(route, headers or {}, body is not None)
-        self._write_request_receipt(run, route, route_path, url, request_headers, body)
+        request_headers = self._request_headers(route, headers or {}, body is not None, routing)
+        self._write_request_receipt(run, route, routing, url, request_headers, body)
 
         try:
             with self._http_client_for_route(route) as client:
@@ -306,7 +451,7 @@ class HermesApiClient:
         self._write_response_receipt(run, route, response)
         self._write_result_receipt(run, route, response, decoded)
         if response.status_code >= 400:
-            raise HermesApiClientError("HTTP_STATUS_ERROR", f"Hermes API returned HTTP {response.status_code}")
+            raise self._status_error(route, routing, response)
         return HermesApiResult(
             run_id=run.manifest.run_id,
             http_status=response.status_code,
@@ -315,6 +460,114 @@ class HermesApiClient:
             request_receipt="request-receipt.json",
             result_receipt="result-receipt.json",
             response_receipt="response-receipt.json",
+        )
+
+    @staticmethod
+    def _status_error(
+        route: HermesApiRoute, routing: "_ProfileRouting", response: httpx.Response
+    ) -> HermesApiClientError:
+        """Map a 4xx on a profiled route to an error the caller can act on.
+
+        The gateway answers a profile it does not serve with 404 and a profile
+        with no usable ``API_SERVER_KEY`` with 401 (``_check_auth`` never falls
+        back to the owner's key). Both are configuration facts with a different
+        fix, so they must not collapse into the generic status error — a silent
+        fallback to the default key is the failure this whole card exists to
+        prevent.
+        """
+
+        if routing.is_profiled:
+            if response.status_code == 401:
+                return HermesApiClientError(
+                    "PROFILE_KEY_UNAUTHORIZED",
+                    f"profile '{routing.profile}' rejected the credential: the gateway serves that "
+                    f"profile only with its own {routing.key_name} from "
+                    f"{routing.env_path}; it never inherits the default profile's key",
+                )
+            if response.status_code == 404:
+                return HermesApiClientError(
+                    "PROFILE_NOT_SERVED",
+                    f"profile '{routing.profile}' is not served by this gateway: the /p/"
+                    f"{routing.profile}/ route does not exist, so the gateway does not multiplex "
+                    f"that profile (a single-profile gateway 404s every other name)",
+                )
+        return HermesApiClientError("HTTP_STATUS_ERROR", f"Hermes API returned HTTP {response.status_code}")
+
+    def _resolve_profile_routing(
+        self, route: HermesApiRoute, profile: str | None, request_path: str
+    ) -> "_ProfileRouting":
+        """Decide the path, credential and receipt metadata for this request.
+
+        ``request_path`` is the concrete path the wrapper asked for (with its
+        real ids), not the route's ``path_pattern`` — the pattern still carries
+        ``{run_id}`` and must never be sent.
+
+        ``None``/default: bare path, process credential — today's behaviour.
+        Named: ``/p/<profile>`` prefix plus that profile's own ``.env`` key.
+        Anything else is refused before a request is built, because a profile
+        this client cannot express in the URL must never be smuggled into the
+        body where it would not route.
+        """
+
+        api = self.config.hermes.api
+        default_profile = self.config.hermes.default_profile
+        if profile is None:
+            return _ProfileRouting(
+                path=request_path,
+                profile=default_profile,
+                is_profiled=False,
+                # Origin-routed: a registry path takes the a2aorch token, an API
+                # path takes the Hermes key. Only a *named* profile overrides
+                # this, because only a named profile has its own credential.
+                credential=self._credential_for_path(request_path),
+                key_name=api.api_key_env,
+                key_source="process_env",
+                env_path=None,
+            )
+
+        normalized = normalize_profile(profile)
+        if normalized == default_profile:
+            # An explicit ask for the default is the default: same path, same
+            # key, same receipts. Anything else would be a behaviour change
+            # hidden behind a redundant argument.
+            return _ProfileRouting(
+                path=request_path,
+                profile=default_profile,
+                is_profiled=False,
+                credential=self._credential_for_path(request_path),
+                key_name=api.api_key_env,
+                key_source="process_env",
+                env_path=None,
+            )
+
+        if not route.path_pattern.startswith(_PROFILE_ROUTABLE_PREFIX):
+            raise HermesApiClientError(
+                "PROFILE_NOT_ROUTABLE",
+                f"profile routing needs a {_PROFILE_ROUTABLE_PREFIX} path; "
+                f"{route.path_pattern} is served by a different origin that has no /p/<profile> route",
+            )
+
+        env_path = self.config.hermes.profile_env_path(normalized)
+        credential = read_env_file(env_path).get(api.profile_api_key_name)
+        if credential is not None:
+            credential = credential.strip()
+        if not credential or len(credential) < api.profile_api_key_min_length:
+            # Fail closed and locally: the gateway would 401 this anyway, and a
+            # local refusal names the file to fix instead of a bare status code.
+            raise HermesApiClientError(
+                "PROFILE_KEY_MISSING",
+                f"profile '{normalized}' has no usable {api.profile_api_key_name} in {env_path}: "
+                f"a named profile is authenticated only by its own key (min "
+                f"{api.profile_api_key_min_length} chars) and never inherits the default profile's",
+            )
+        return _ProfileRouting(
+            path=api.profile_path(normalized, request_path),
+            profile=normalized,
+            is_profiled=True,
+            credential=credential,
+            key_name=api.profile_api_key_name,
+            key_source="profile_env",
+            env_path=env_path,
         )
 
     def _url_for_path(self, path: str) -> str:
@@ -344,16 +597,21 @@ class HermesApiClient:
         if body is not None and len(body) > route.request_body_max_bytes:
             raise RouteDeniedError("REQUEST_TOO_LARGE", "request body exceeds route limit")
 
-    def _request_headers(self, route: HermesApiRoute, supplied_headers: dict[str, str], has_body: bool) -> dict[str, str]:
+    def _request_headers(
+        self,
+        route: HermesApiRoute,
+        supplied_headers: dict[str, str],
+        has_body: bool,
+        routing: "_ProfileRouting",
+    ) -> dict[str, str]:
         headers = {"Accept": "application/json", "User-Agent": "hermes-toolkit-mcp/0.1"}
         if has_body:
             headers["Content-Type"] = "application/json"
         for key, value in supplied_headers.items():
             canonical = "-".join(part.capitalize() for part in key.split("-"))
             headers[canonical] = value
-        credential = self._credential_for_path(route.path_pattern)
-        if credential:
-            headers["Authorization"] = f"Bearer {credential}"
+        if routing.credential:
+            headers["Authorization"] = f"Bearer {routing.credential}"
         return headers
 
     def _http_client_for_route(self, route: HermesApiRoute) -> httpx.Client:
@@ -371,18 +629,36 @@ class HermesApiClient:
         return route.path_pattern.startswith("/api/v1")
 
     def _origin_for_path(self, path: str) -> tuple[str, str | None]:
-        normalized = path if path.startswith("/") else f"/{path}"
+        normalized = self._api_surface_path(path)
         if normalized.startswith("/api/v1"):
             return (self.config.a2aorch.base_url, self.config.a2aorch.token_env)
         return (self.config.hermes.api.base_url, self.config.hermes.api.api_key_env)
+
+    @staticmethod
+    def _api_surface_path(path: str) -> str:
+        """The path as the route table knows it, without a profile prefix.
+
+        A profiled path (``/p/arthur/v1/runs``) is still Hermes API traffic:
+        origin selection and receipt labels must classify it by the route it
+        addresses, not by the multiplex segment in front of it.
+        """
+
+        normalized = path if path.startswith("/") else f"/{path}"
+        match = re.match(r"^/p/[^/]+(?=/|$)", normalized)
+        return normalized[len(match.group(0)):] or "/" if match else normalized
 
     def _credential_for_path(self, path: str) -> str | None:
         """Resolved bearer credential for the origin serving this path.
 
         The a2aorch gateway accepts a token from its env var or from the config
         file (env wins); the Hermes API surface only ever reads its env var.
+        This is the *default-profile* answer and is reported in the receipt's
+        ``auth`` block for continuity; the credential actually sent is
+        ``routing.credential``, which for a named profile comes from that
+        profile's own ``.env``.
         """
-        normalized = path if path.startswith("/") else f"/{path}"
+
+        normalized = self._api_surface_path(path)
         if normalized.startswith("/api/v1"):
             return self.config.a2aorch.resolve_token()
         _, key_env = self._origin_for_path(normalized)
@@ -392,7 +668,7 @@ class HermesApiClient:
         self,
         run: Any,
         route: HermesApiRoute,
-        path: str,
+        routing: "_ProfileRouting",
         url: str,
         headers: dict[str, str],
         body: bytes | None,
@@ -412,9 +688,19 @@ class HermesApiClient:
                 },
                 "request": {
                     "method": route.method,
-                    "path": path,
+                    "path": routing.path,
                     "url_origin": str(parsed_url.copy_with(path="/", query=None, fragment=None)),
                     "api_surface": "a2aorch" if route.path_pattern.startswith("/api/v1") else "api",
+                },
+                "profile_routing": {
+                    "profile": routing.profile,
+                    "profiled": routing.is_profiled,
+                    "route_prefix": self.config.hermes.api.profile_prefix if routing.is_profiled else None,
+                    "credential_source": routing.key_source,
+                    "key_name": routing.key_name,
+                    "key_env_path": str(routing.env_path) if routing.env_path is not None else None,
+                    # Presence and length only — the value never reaches a receipt.
+                    "credential_present": bool(routing.credential),
                 },
                 "auth": {
                     "api_key_env": key_env,

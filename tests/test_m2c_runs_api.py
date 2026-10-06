@@ -182,7 +182,10 @@ def test_runs_start_mocked_call_writes_receipts_and_body(
     assert result["data"]["response"]["run_id"] == "run_123"
 
     call = next(c for c in _RunsHandler.calls if c["path"] == "/v1/runs")
-    assert call["body"]["prompt"] == "hello world"
+    # The Runs API's own field name for the prompt is ``input``; sending
+    # ``prompt`` gets a 400 "Missing 'input' field" from the live server.
+    assert call["body"]["input"] == "hello world"
+    assert "prompt" not in call["body"]
     assert call["body"]["model"] == "hermes-agent"
     assert call["body"]["tags"] == ["smoke"]
     assert call["headers"]["Authorization"] == f"Bearer {token}"

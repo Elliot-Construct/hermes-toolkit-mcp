@@ -52,6 +52,27 @@ The numeric usage counters `prompt_tokens`, `completion_tokens`, `total_tokens`,
 
 The server reports secret presence/absence, hashes, sizes, and bounded previews rather than raw values. `hermes_config_summary` reports MCP env key names and API-key env-var presence only, never env values.
 
+## Per-profile credential isolation
+
+A named profile is addressed by URL (`/p/<profile>/…`) and authorized by that
+profile's own `API_SERVER_KEY`, read from `<profile home>/.env` and nowhere else.
+The reader never touches `os.environ`: the process environment holds the default
+profile's credential, so consulting it for a named profile would let one
+profile's key authenticate a call addressed to another.
+
+Fail-closed rules:
+
+- a missing or too-short profile key is refused locally (`PROFILE_KEY_MISSING`);
+  the default key is never substituted, and no request is sent;
+- a gateway 401 on a profiled route is reported as `PROFILE_KEY_UNAUTHORIZED`,
+  a 404 as `PROFILE_NOT_SERVED` — distinct, because the fix differs;
+- a profile that cannot be expressed in the route's URL is refused
+  (`PROFILE_NOT_ROUTABLE`) rather than serialized into the body, where the
+  server would accept and ignore it;
+- receipts record the credential *source* (`process_env` / `profile_env`), the
+  key name, the `.env` path and a presence boolean — never the value. A test
+  asserts no resolved key appears in any receipt, envelope or manifest.
+
 ## Path containment
 
 Every file path supplied to a tool must resolve under configured roots: Hermes homes, toolkit root, artifact root, or explicitly allowlisted workspaces. Checks resolve real paths after expanding `..` and symlinks so symlink escapes are denied. Discovery and eval listing/execution share one post-symlink configured-path resolver; an external target is allowed only when its resolved root is listed in `policy.allowed_paths`, and broad parent directories are not silently added.

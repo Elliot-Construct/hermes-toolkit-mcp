@@ -6,7 +6,42 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- **Profile routing by URL + profile-scoped key.** `hermes_api_runs_start` (and
+  the other Runs API wrappers) accept a `profile` argument that is expressed in
+  the **URL**, not the request body: a named profile is issued to
+  `/p/<profile>/v1/runs` and authenticated with that profile's own
+  `API_SERVER_KEY`, read from the profile's `.env`. Under a multiplexed gateway
+  the URL segment is what selects the profile, so a body `profile` was silently
+  ignored and every run landed on the default profile with the default key.
+  - New `hermes.api` keys: `profile_prefix` (default `/p/{profile}`),
+    `profile_api_key_name` (always `API_SERVER_KEY` — there is no
+    `<PROFILE>_API_SERVER_KEY` convention) and `profile_api_key_min_length`
+    (default 16, mirroring the gateway's own shape check).
+  - The default profile is unchanged: bare path, process credential.
+  - New error codes, surfaced instead of a generic status failure:
+    `PROFILE_KEY_MISSING` (no usable key in the profile's `.env` — refused
+    locally, never falling back to the default key), `PROFILE_KEY_UNAUTHORIZED`
+    (the gateway 401'd the profile's credential), `PROFILE_NOT_SERVED` (the
+    gateway 404'd the `/p/<profile>/` route) and `PROFILE_NOT_ROUTABLE` (the
+    route has no multiplex mirror, so the argument is refused rather than sent
+    in a body where it would not route).
+  - Request receipts carry a `profile_routing` block — profile, whether the
+    path was prefixed, credential source, key name and the `.env` path — with a
+    presence boolean only; no key value reaches any receipt, envelope or log.
+
 ### Changed
+
+- **`hermes_api_runs_start` sends the prompt as `input`.** The Runs API's own
+  field name for the prompt is `input`; the wrapper previously sent `prompt`,
+  which the live server rejects with `400 Missing 'input' field`. The MCP
+  argument is still called `prompt`.
+- **Runs API arguments the server ignores are no longer accepted.**
+  `hermes_api_runs_start` drops `home` and `dry_run`: the Runs API reads
+  neither, so accepting them let a caller believe a run was sandboxed or
+  addressed elsewhere while it was live on the default profile. `context` and
+  `tags` are still passed through, documented as caller-side metadata.
 
 - **Kanban replaced by a2aorch.** The task surface now targets the
   [a2aorch](https://github.com/Elliot-Construct/a2aorch) task registry instead of

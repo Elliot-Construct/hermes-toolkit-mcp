@@ -190,7 +190,10 @@ class RunsStartRequest(BaseModel):
     prompt: str = Field(
         min_length=1,
         max_length=16_000,
-        description="User prompt that starts the Hermes run.",
+        description=(
+            "User prompt that starts the Hermes run. Sent to the server as its 'input' field, which "
+            "is the Runs API's own name for it."
+        ),
     )
     model: str | None = Field(
         default=None,
@@ -199,27 +202,28 @@ class RunsStartRequest(BaseModel):
     )
     profile: str | None = Field(
         default=None,
-        max_length=128,
-        pattern=r"^[A-Za-z0-9_.-]+$",
-        description="Optional Hermes profile name used by the run.",
-    )
-    home: str | None = Field(
-        default=None,
-        max_length=512,
-        description="Optional Hermes home path used by the run.",
+        max_length=64,
+        description=(
+            "Optional Hermes profile the run executes as. Routed in the URL: the request is sent "
+            "to /p/<profile>/v1/runs and authenticated with that profile's own API_SERVER_KEY, which "
+            "is read from the profile's .env. The default profile uses the bare path and the "
+            "server's own credential. Never sent in the body — a body 'profile' does not route."
+        ),
     )
     context: dict[str, Any] | None = Field(
         default=None,
-        description="Optional structured context passed to the Hermes run.",
+        description=(
+            "Optional structured context recorded on the request. Passed through as sent; the Runs "
+            "API does not currently read it, so treat it as metadata for the caller's own audit."
+        ),
     )
     tags: list[str] | None = Field(
         default=None,
         max_length=16,
-        description="Optional tags attached to the run.",
-    )
-    dry_run: bool | None = Field(
-        default=None,
-        description="When true, the server may validate the request without creating a live run.",
+        description=(
+            "Optional tags recorded on the request. Passed through as sent; the Runs API does not "
+            "currently read them, so treat them as metadata for the caller's own audit."
+        ),
     )
 
     @field_validator("tags")
@@ -241,6 +245,15 @@ class RunsRunIdRequest(BaseModel):
         max_length=128,
         pattern=_RUN_ID_PATTERN,
         description="Hermes run id such as run_123 or a UUID.",
+    )
+    profile: str | None = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Optional Hermes profile that owns the run. Routed in the URL (/p/<profile>/v1/runs/…); "
+            "a run started on a named profile is only visible in that profile's store, so this must "
+            "match the profile the run was started with."
+        ),
     )
 
     @field_validator("run_id")
@@ -686,6 +699,7 @@ def _call_api(
     method: str,
     path: str,
     json_body: Any = None,
+    profile: str | None = None,
     safe_next_actions: list[str] | None = None,
 ) -> dict[str, Any]:
     """Shared request wrapper for Hermes API state-changing endpoints."""
@@ -697,6 +711,7 @@ def _call_api(
             path,
             typed_wrapper_name=wrapper_name,
             json_body=json_body,
+            profile=profile,
         )
     except RouteDeniedError as exc:
         raise DiscoveryError(exc.code, str(exc)) from exc
@@ -1032,6 +1047,7 @@ def _call_api_post(
     wrapper_name: str,
     path: str,
     json_body: dict[str, Any],
+    profile: str | None = None,
     require_model_spend: bool = False,
 ) -> dict[str, Any]:
     """Shared POST wrapper for Hermes API call endpoints."""
@@ -1043,6 +1059,7 @@ def _call_api_post(
             path,
             typed_wrapper_name=wrapper_name,
             json_body=json_body,
+            profile=profile,
         )
     except RouteDeniedError as exc:
         raise DiscoveryError(exc.code, str(exc)) from exc
@@ -1077,6 +1094,7 @@ def _call_api_get(
     wrapper_name: str,
     path: str,
     query_params: dict[str, Any] | None = None,
+    profile: str | None = None,
 ) -> dict[str, Any]:
     """Shared GET wrapper for Hermes API run endpoints that require api_call gates."""
 
@@ -1096,6 +1114,7 @@ def _call_api_get(
             "GET",
             path,
             typed_wrapper_name=wrapper_name,
+            profile=profile,
         )
     except RouteDeniedError as exc:
         raise DiscoveryError(exc.code, str(exc)) from exc
@@ -1125,32 +1144,38 @@ def _call_api_get(
 
 
 def hermes_api_runs_start(config: ToolkitMcpConfig, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Typed wrapper for POST /v1/runs."""
+    """Typed wrapper for POST /v1/runs.
+
+    ``profile`` selects the run's profile **in the URL** — the path becomes
+    ``/p/<profile>/v1/runs`` and the credential is that profile's own
+    ``API_SERVER_KEY`` — so the run lands in the addressed profile's session
+    store. It is deliberately never written to the body: the Runs API has no
+    body-level profile selector, so a body ``profile`` would be accepted and
+    silently ignored, leaving the run on the default profile.
+
+    The prompt goes out as the Runs API's own ``input`` field; ``prompt`` is
+    this wrapper's name for it, not the server's.
+    """
 
     try:
         request = RunsStartRequest.model_validate(arguments or {})
     except ValidationError as exc:
         raise DiscoveryError("SCHEMA_INVALID", _schema_message(exc, prefix="runs start request is invalid")) from exc
 
-    body: dict[str, Any] = {"prompt": request.prompt}
+    body: dict[str, Any] = {"input": request.prompt}
     if request.model is not None:
         body["model"] = request.model
-    if request.profile is not None:
-        body["profile"] = request.profile
-    if request.home is not None:
-        body["home"] = request.home
     if request.context is not None:
         body["context"] = request.context
     if request.tags is not None:
         body["tags"] = request.tags
-    if request.dry_run is not None:
-        body["dry_run"] = request.dry_run
 
     result = _call_api_post(
         config,
         wrapper_name="hermes_api_runs_start",
         path="/v1/runs",
         json_body=body,
+        profile=request.profile,
         require_model_spend=True,
     )
     result["safe_next_actions"] = [
@@ -1161,7 +1186,12 @@ def hermes_api_runs_start(config: ToolkitMcpConfig, arguments: dict[str, Any] | 
 
 
 def hermes_api_runs_get(config: ToolkitMcpConfig, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Typed wrapper for GET /v1/runs/{run_id}."""
+    """Typed wrapper for GET /v1/runs/{run_id}.
+
+    ``profile`` addresses the profile that owns the run, in the URL: a run
+    started on ``/p/arthur/v1/runs`` exists only in arthur's store, so reading
+    it back through the default profile would 404.
+    """
 
     try:
         request = RunsRunIdRequest.model_validate(arguments or {})
@@ -1172,6 +1202,7 @@ def hermes_api_runs_get(config: ToolkitMcpConfig, arguments: dict[str, Any] | No
         config,
         wrapper_name="hermes_api_runs_get",
         path=f"/v1/runs/{request.run_id}",
+        profile=request.profile,
     )
 
 
@@ -1180,6 +1211,7 @@ def hermes_api_runs_events(config: ToolkitMcpConfig, arguments: dict[str, Any] |
 
     This wrapper returns non-streaming event metadata; it does not proxy a
     Server-Sent Events or WebSocket stream through the stdio MCP boundary.
+    ``profile`` addresses the run's owning profile in the URL.
     """
 
     try:
@@ -1200,11 +1232,16 @@ def hermes_api_runs_events(config: ToolkitMcpConfig, arguments: dict[str, Any] |
         wrapper_name="hermes_api_runs_events",
         path=f"/v1/runs/{request.run_id}/events",
         query_params=query_params,
+        profile=request.profile,
     )
 
 
 def hermes_api_runs_stop(config: ToolkitMcpConfig, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Typed wrapper for POST /v1/runs/{run_id}/stop."""
+    """Typed wrapper for POST /v1/runs/{run_id}/stop.
+
+    ``profile`` addresses the run's owning profile in the URL; a stop sent to
+    the default profile cannot reach a run that belongs to a named one.
+    """
 
     try:
         request = RunsStopRequest.model_validate(arguments or {})
@@ -1222,11 +1259,15 @@ def hermes_api_runs_stop(config: ToolkitMcpConfig, arguments: dict[str, Any] | N
         wrapper_name="hermes_api_runs_stop",
         path=f"/v1/runs/{request.run_id}/stop",
         json_body=body,
+        profile=request.profile,
     )
 
 
 def hermes_api_runs_approval(config: ToolkitMcpConfig, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Typed wrapper for POST /v1/runs/{run_id}/approval."""
+    """Typed wrapper for POST /v1/runs/{run_id}/approval.
+
+    ``profile`` addresses the run's owning profile in the URL.
+    """
 
     try:
         request = RunsApprovalRequest.model_validate(arguments or {})
@@ -1244,6 +1285,7 @@ def hermes_api_runs_approval(config: ToolkitMcpConfig, arguments: dict[str, Any]
         wrapper_name="hermes_api_runs_approval",
         path=f"/v1/runs/{request.run_id}/approval",
         json_body=body,
+        profile=request.profile,
     )
 
 

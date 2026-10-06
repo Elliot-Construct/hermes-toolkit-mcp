@@ -29,14 +29,48 @@ class ApiDocsConfig(BaseModel):
 
 
 class HermesApiConfig(BaseModel):
+    """Connection settings for the Hermes API surface.
+
+    Under a multiplexed gateway every native route is mirrored at
+    ``/p/{profile}{path}`` and the **URL segment** — never a body field —
+    selects the profile the request runs as, including which credential
+    authorizes it (``api_server._expected_api_key``). A named profile is
+    therefore addressed by prefixing the path and authenticating with that
+    profile's own ``API_SERVER_KEY``; the default profile keeps the bare path
+    and the process credential exactly as before.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     base_url: str = "http://127.0.0.1:8642/v1"
     api_key_env: str = "API_SERVER_KEY"
+    #: Multiplex route prefix, applied to a named profile's path. ``{profile}``
+    #: is substituted with the normalized profile id.
+    profile_prefix: str = "/p/{profile}"
+    #: Key name read from a named profile's ``.env``. Always ``API_SERVER_KEY``:
+    #: the gateway resolves a profile's key through ``agent.secret_scope`` under
+    #: its own name, so an ``<PROFILE>_API_SERVER_KEY`` convention does not exist.
+    profile_api_key_name: str = "API_SERVER_KEY"
+    #: Minimum usable length for a profile key, mirroring the gateway's
+    #: ``has_usable_secret(key, min_length=16)``. A shorter value would be
+    #: rejected upstream as a 401, so it is refused locally with a clearer error.
+    profile_api_key_min_length: int = 16
     default_model: str = "hermes-agent"
     allow_streaming: bool = False
     request_timeout_seconds: PositiveInt = 120
     docs: ApiDocsConfig = Field(default_factory=ApiDocsConfig)
+
+    @field_validator("profile_prefix")
+    @classmethod
+    def _profile_prefix_shape(cls, value: str) -> str:
+        if "{profile}" not in value:
+            raise ValueError("profile_prefix must contain the {profile} placeholder")
+        return value
+
+    def profile_path(self, profile: str, path: str) -> str:
+        """Return ``path`` with the multiplex profile prefix inserted."""
+        normalized = path if path.startswith("/") else f"/{path}"
+        return f"{self.profile_prefix.format(profile=profile)}{normalized}"
 
 
 class A2AOrchApiConfig(BaseModel):
@@ -289,6 +323,41 @@ class HermesConfig(BaseModel):
     @classmethod
     def _cli(cls, value: str | Path) -> Path:
         return _expand_path(value)
+
+    def root_home(self) -> Path:
+        """The hermes root home — the directory ``profiles/`` sits under.
+
+        ``homes["default"]`` may be configured as the root (``~/.hermes``, the
+        documented shape and what ``hermes_profiles_list`` enumerates) or as a
+        profile home (``~/.hermes/profiles/alfred``, the shape an agent profile's
+        own ``HERMES_HOME`` takes). Both resolve to the same root, so a caller
+        that only knows its own home still finds its siblings.
+        """
+
+        configured = self.homes.get(self.default_profile) or self.homes.get("default") or Path.home() / ".hermes"
+        candidate = Path(configured).expanduser()
+        # A configured home that already names a profile (…/profiles/<name>) is
+        # not the root; its parent's parent is. Checked against the directory
+        # shape rather than the profile name so a root literally called
+        # "profiles" cannot be mistaken for one.
+        if candidate.parent.name == "profiles":
+            return candidate.parent.parent
+        return candidate
+
+    def profile_home(self, profile: str) -> Path:
+        """Resolve a profile id to its hermes home directory.
+
+        Mirrors the gateway's own layout (``hermes_cli.profiles.get_profile_dir``):
+        the default profile is the root home, a named profile is
+        ``<root>/profiles/<id>``. Callers must validate the id first.
+        """
+
+        return self.root_home() if profile == self.default_profile else self.root_home() / "profiles" / profile
+
+    def profile_env_path(self, profile: str) -> Path:
+        """``<profile home>/.env`` — where a profile-scoped secret is stored."""
+
+        return self.profile_home(profile) / ".env"
 
 
 class ToolkitConfig(BaseModel):

@@ -169,6 +169,48 @@ Full test suite: `uv run pytest` — the HTTP surface is `tests/test_http_server
 the flow itself is `tests/test_oauth_provider.py` / `tests/test_oauth_login.py`,
 and the end-to-end evidence harness lives in `evidence/oauth_mcp_dance.py`.
 
+## Profile routing (multiplexed gateways)
+
+When the Hermes gateway multiplexes profiles, a request's profile comes from the
+**URL**, not the body: every route is mounted at both `{path}` and
+`/p/{profile}{path}`, and `_expected_api_key()` authorizes the URL-selected
+profile — the default profile with the gateway's own key, a named profile with
+its own `API_SERVER_KEY` from that profile's `.env` (resolved through
+`agent.secret_scope`, so profile A's key never authorizes profile B).
+
+The Runs API wrappers take an optional `profile` and express it that way:
+
+```python
+hermes_api_runs_start(prompt="…", profile="arthur")
+# -> POST /p/arthur/v1/runs, Authorization: Bearer <arthur's API_SERVER_KEY>
+```
+
+`profile` absent (or naming the configured default) keeps the bare path and the
+process credential exactly as before. A named profile's key is read from
+`<root>/profiles/<profile>/.env`; if it is missing or too short the call is
+refused locally as `PROFILE_KEY_MISSING` and the default key is **never**
+substituted. A gateway 401 becomes `PROFILE_KEY_UNAUTHORIZED`; a 404 (the
+gateway does not serve that profile — a single-profile gateway 404s every
+`/p/<other>/` prefix) becomes `PROFILE_NOT_SERVED`.
+
+```yaml
+hermes:
+  default_profile: default
+  api:
+    base_url: "http://127.0.0.1:8642/v1"
+    api_key_env: API_SERVER_KEY   # the default profile's credential
+    profile_prefix: "/p/{profile}"      # multiplex route prefix
+    profile_api_key_name: API_SERVER_KEY  # always this name; no <PROFILE>_ prefix
+    profile_api_key_min_length: 16        # mirrors the gateway's own check
+```
+
+No key value reaches a receipt, envelope or log: receipts carry a
+`profile_routing` block with the profile, the credential source, the key name
+and the `.env` path, plus a presence boolean.
+
+Live evidence (real gateway adapter, real client):
+`evidence/profile_routing_live.py` — 23 checks, including the two gateway modes.
+
 ## M1 read-only tools
 
 - `hermes_status_overview`
@@ -203,7 +245,7 @@ M2c exposes the first prompt-bearing typed API wrapper (`hermes_api_chat_complet
 
 - `hermes_api_chat_completions` — OpenAI-compatible `POST /v1/chat/completions` with bounded messages, `stream=false`, and mocked/local-first non-loopback opt-in.
 - `hermes_api_responses_create` / `hermes_api_responses_get` / `hermes_api_responses_delete` — typed OpenAI Responses API wrappers.
-- `hermes_api_runs_start` / `hermes_api_runs_get` / `hermes_api_runs_events` / `hermes_api_runs_stop` / `hermes_api_runs_approval` — typed Runs API wrappers.
+- `hermes_api_runs_start` / `hermes_api_runs_get` / `hermes_api_runs_events` / `hermes_api_runs_stop` / `hermes_api_runs_approval` — typed Runs API wrappers. Each accepts an optional `profile` that is routed in the URL (`/p/<profile>/v1/runs…`) with that profile's own `API_SERVER_KEY`; see **Profile routing** above. The prompt is sent as the Runs API's own `input` field.
 - `hermes_api_jobs_list` / `hermes_api_jobs_create` / `hermes_api_jobs_get` / `hermes_api_jobs_update` / `hermes_api_jobs_delete` / `hermes_api_jobs_pause` / `hermes_api_jobs_resume` / `hermes_api_jobs_run` — typed scheduler/cron job wrappers. `hermes_api_jobs_list` uses concrete `limit=25`/`offset=0` defaults, omits prompt bodies from summaries (use `hermes_api_jobs_get` for the full definition), records upstream body bytes/hash in receipts, and returns pagination fields plus a 24 KiB item budget/32 KiB final-envelope budget.
 - `hermes_api_skills_list` — `GET /v1/skills` returning structured skill metadata with optional category/limit/offset filters.
 - `hermes_api_toolsets_list` — `GET /v1/toolsets` returning structured toolset metadata with optional category/limit/offset filters.
