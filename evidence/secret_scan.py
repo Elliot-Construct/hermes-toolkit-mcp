@@ -41,7 +41,7 @@ FILES = sorted(set(
     else DEFAULT_FILES
 ))
 
-Disposition = Literal["raw_leak", "synthetic_exempt", "context_exempt"]
+Disposition = Literal["raw_leak", "synthetic_exempt", "context_exempt", "code_expression"]
 
 
 def _get_bound_fixture_value(rel_path: str, line_no: int) -> str:
@@ -92,17 +92,37 @@ def _is_synthetic_instance(rel: str, lineno: int, value: str, match_type: str) -
 ASSIGN_RE = re.compile(r"[\"']?(?:api[_-]?key|token|secret|password)[\"']?\s*[:=]\s*[\"']?([A-Za-z0-9_\-./=+]{16,})[\"']?")
 STANDALONE_RE = re.compile(r"\b(sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,})\b")
 
+#: An assignment whose value is a code reference rather than a literal, e.g.
+#: ``api_key = config.hermes.api.resolve_api_key()`` or a dotted attribute path.
+#: A dotted path or a call cannot itself BE a secret, and reporting one as a raw
+#: leak is a false positive that trains reviewers to ignore the scanner.
+#: Deliberately narrow: a BARE identifier is still flagged (``api_key = foobar``
+#: could be a constant), and no string literal is exempt at any length. Note the
+#: assignment capture stops before ``()``, so both forms must match here.
+CODE_EXPRESSION_RE = re.compile(
+    r"^(?:[A-Za-z_][A-Za-z0-9_]*\.)+[A-Za-z_][A-Za-z0-9_]*(?:\(\))?$"
+    r"|^[A-Za-z_][A-Za-z0-9_]*\(\)$"
+)
+
 matches: list[dict[str, Any]] = []
 dispositions: list[dict[str, Any]] = []
 raw_leak_count = 0
 synthetic_exempt_count = 0
 context_exempt_count = 0
+code_expression_count = 0
 
 
 def _record_match(rel: str, lineno: int, line: str, value: str, match_type: str) -> None:
     """Classify one match using explicit typed disposition logic."""
     global raw_leak_count, synthetic_exempt_count
     location = {"file": rel, "line": lineno, "match_type": match_type, "value_hash": _full_hash(value)}
+    if match_type == "assignment" and CODE_EXPRESSION_RE.match(value):
+        # A code expression, not a literal: nothing to leak. Counted separately so
+        # the exemption is visible in the report rather than silently dropped.
+        global code_expression_count
+        code_expression_count += 1
+        dispositions.append({**location, "disposition": "code_expression"})
+        return
     if _is_synthetic_instance(rel, lineno, value, match_type):
         disp: Disposition = "synthetic_exempt"
         synthetic_exempt_count += 1
@@ -174,7 +194,8 @@ report = {
     "raw_leak_count": raw_leak_count,
     "synthetic_exempt_count": synthetic_exempt_count,
     "context_exempt_count": context_exempt_count,
-    "result": "POSSIBLE_LEAKS_FOUND" if matches else ("EXEMPT_ONLY" if synthetic_exempt_count or context_exempt_count else "NO_MATCHES"),
+    "code_expression_count": code_expression_count,
+    "result": "POSSIBLE_LEAKS_FOUND" if matches else ("EXEMPT_ONLY" if synthetic_exempt_count or context_exempt_count or code_expression_count else "NO_MATCHES"),
     "matches": matches,
     "dispositions": dispositions,
 }

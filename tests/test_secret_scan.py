@@ -197,6 +197,47 @@ def test_scanner_report_omits_candidate_values() -> None:
         shutil.rmtree(tmp_root, ignore_errors=True)
 
 
+def test_scanner_exempts_a_code_expression_but_not_a_literal() -> None:
+    """A dotted path/call assignment is not a secret; a literal still is.
+
+    ``api_key = config.hermes.api.resolve_api_key()`` reports as
+    ``code_expression``. The exemption must stay narrow: a bare identifier and
+    every string literal are still candidates, including one nested inside a call.
+    """
+
+    # Values are assembled at runtime so this test file itself contains no
+    # literal secret shape — the same convention the fixture above follows.
+    code_expression = "api_key = config.hermes.api.resolve_api_key()\n"
+    dotted_attribute = "api_key = self.config.hermes.api.api_key\n"
+    # Long enough to be captured; a bare identifier is still a candidate because
+    # it could be a module-level constant holding a real secret.
+    bare_identifier = "api_key = " + "foobarbazquux" + "quuxquux" + "\n"
+    quoted_literal = "token = \"" + "super-secret-" + "value-" + "1234567890" + "\"\n"
+    literal_in_call = "api_key = os.environ.get(\"X\", \"" + "sk-" + "Q" * 24 + "\")\n"
+
+    report = _run_scanner(
+        {
+            "code_expression.txt": code_expression,
+            "dotted_attribute.txt": dotted_attribute,
+            "bare_identifier.txt": bare_identifier,
+            "quoted_literal.txt": quoted_literal,
+            "literal_in_call.txt": literal_in_call,
+        }
+    )
+
+    dispositions = {d["file"]: d["disposition"] for d in report["dispositions"]}
+    assert dispositions["code_expression.txt"] == "code_expression"
+    assert dispositions["dotted_attribute.txt"] == "code_expression"
+    # A bare identifier could be a constant, so it is still flagged.
+    assert dispositions["bare_identifier.txt"] == "raw_leak"
+    assert dispositions["quoted_literal.txt"] == "raw_leak"
+    # A literal nested inside a call is still a literal.
+    assert dispositions["literal_in_call.txt"] == "raw_leak"
+    assert report["code_expression_count"] == 2
+    # No value ever reaches the report.
+    assert "super-secret-value-1234567890" not in json.dumps(report)
+
+
 def test_scanner_real_repo_finds_fixture_and_omits_values() -> None:
     """Real repository scan finds the exact fixture and emits only counts/hashes."""
     result = subprocess.run(

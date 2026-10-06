@@ -592,7 +592,7 @@ def _http_probe(
 
 def _auth_headers(config: ToolkitMcpConfig) -> dict[str, str]:
     headers = {"Accept": "application/json", "User-Agent": "hermes-toolkit-mcp/0.1"}
-    api_key = os.environ.get(config.hermes.api.api_key_env)
+    api_key = config.hermes.api.resolve_api_key()
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
@@ -624,7 +624,7 @@ def hermes_api_smoke(config: ToolkitMcpConfig, arguments: dict[str, Any] | None 
         scope=safe_scope_summary(scope),
         slug="api-smoke",
     )
-    api_key_present = bool(os.environ.get(config.hermes.api.api_key_env))
+    api_key_present = bool(config.hermes.api.resolve_api_key())
     headers = _auth_headers(config)
     stages: dict[str, dict[str, Any]] = {}
     payload = {

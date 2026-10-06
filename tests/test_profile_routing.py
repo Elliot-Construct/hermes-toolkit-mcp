@@ -686,6 +686,105 @@ def test_default_profile_receipt_records_process_env_routing(
     assert request_receipt["request"]["path"] == "/v1/runs"
 
 
+def test_config_api_key_supplies_the_default_credential_when_env_is_absent(
+    tmp_path: Path, gateway: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A launcher that does not load the Hermes .env can supply hermes.api.api_key.
+
+    The env var still wins when both are set, matching a2aorch.token / http.token.
+    """
+
+    monkeypatch.delenv("HERMES_TOOLKIT_TEST_API_KEY", raising=False)
+    config = ToolkitMcpConfig.from_mapping(
+        {
+            "hermes": {
+                "homes": {"default": str(tmp_path / "home")},
+                "default_profile": "default",
+                "api": {
+                    "base_url": gateway,
+                    "api_key_env": "HERMES_TOOLKIT_TEST_API_KEY",
+                    "api_key": DEFAULT_KEY,
+                    "request_timeout_seconds": 3,
+                },
+            },
+            "toolkit": {"root": str(tmp_path / "toolkit")},
+            "artifacts": {"root": str(tmp_path / "artifacts")},
+            "policy": {
+                "mode": "api_call",
+                "allow_live_api_calls": True,
+                "allow_external_side_effects": True,
+                "allow_model_spend": True,
+                "allow_agent_tool_calls": True,
+                "allowed_paths": [str(tmp_path)],
+            },
+        }
+    )
+
+    result = _run_tool("hermes_api_runs_start", {"prompt": "hello"}, config)
+    assert result["ok"] is True, result
+    assert _ProfileAwareHandler.calls[-1]["headers"]["Authorization"] == f"Bearer {DEFAULT_KEY}"
+
+
+def test_env_var_wins_over_the_config_api_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The env var takes precedence, exactly like a2aorch.token."""
+
+    monkeypatch.setenv("HERMES_TOOLKIT_TEST_API_KEY", "env-" + "E" * 32)
+    config = ToolkitMcpConfig.from_mapping(
+        {"hermes": {"api": {"api_key_env": "HERMES_TOOLKIT_TEST_API_KEY", "api_key": "config-" + "C" * 32}}}
+    )
+    assert config.hermes.api.resolve_api_key() == "env-" + "E" * 32
+
+
+def test_config_api_key_is_not_used_for_a_named_profile(tmp_path: Path) -> None:
+    """The config key is the DEFAULT credential only — never a profile's.
+
+    Otherwise one profile could borrow the owner's key, which is the isolation
+    this whole contract exists to keep.
+    """
+
+    root = tmp_path / "home"
+    root.mkdir(exist_ok=True)
+    config = ToolkitMcpConfig.from_mapping(
+        {
+            "hermes": {
+                "homes": {"default": str(root)},
+                "default_profile": "default",
+                "api": {
+                    "base_url": "http://127.0.0.1:9",
+                    "api_key_env": "HERMES_TOOLKIT_TEST_API_KEY",
+                    "api_key": DEFAULT_KEY,
+                },
+            },
+            "toolkit": {"root": str(tmp_path / "toolkit")},
+            "artifacts": {"root": str(tmp_path / "artifacts")},
+            "policy": {
+                "mode": "api_call",
+                "allow_live_api_calls": True,
+                "allow_external_side_effects": True,
+                "allow_model_spend": True,
+                "allow_agent_tool_calls": True,
+                "allowed_paths": [str(tmp_path)],
+            },
+        }
+    )
+
+    # arthur has no key of its own: the config key must NOT stand in for it.
+    result = _run_tool("hermes_api_runs_start", {"prompt": "hello", "profile": "arthur"}, config)
+    assert result["ok"] is False
+    assert result["error_code"] == "PROFILE_KEY_MISSING"
+
+
+def test_config_summary_reports_presence_without_the_value(tmp_path: Path) -> None:
+    """A configured key is reported as present; its value never appears."""
+
+    config = ToolkitMcpConfig.from_mapping(
+        {"hermes": {"api": {"api_key_env": "HERMES_TOOLKIT_TEST_API_KEY", "api_key": "cfg-" + "K" * 32}}}
+    )
+    summary = config.safe_summary()
+    assert summary["api_key_env_present"] is True
+    assert "cfg-" + "K" * 32 not in repr(summary)
+
+
 # ---------------------------------------------------------------------------
 # Hidden profiles: never selectable, never routable
 # ---------------------------------------------------------------------------

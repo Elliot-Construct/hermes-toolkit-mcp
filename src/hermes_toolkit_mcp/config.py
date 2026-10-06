@@ -64,6 +64,13 @@ class HermesApiConfig(BaseModel):
 
     base_url: str = "http://127.0.0.1:8642/v1"
     api_key_env: str = "API_SERVER_KEY"
+    #: Direct credential for the default profile, for deployments whose launcher
+    #: does not load the Hermes `.env` into the process environment. The env var
+    #: wins when both are set — the same shape as ``a2aorch.token`` and
+    #: ``http.token``. Never a profile key: a named profile's credential is always
+    #: read from that profile's own ``.env``, so one profile cannot borrow
+    #: another's. Store this in a config file with restrictive ACLs.
+    api_key: str | None = None
     #: Multiplex route prefix, applied to a named profile's path. ``{profile}``
     #: is substituted with the normalized profile id.
     profile_prefix: str = "/p/{profile}"
@@ -91,6 +98,21 @@ class HermesApiConfig(BaseModel):
         """Return ``path`` with the multiplex profile prefix inserted."""
         normalized = path if path.startswith("/") else f"/{path}"
         return f"{self.profile_prefix.format(profile=profile)}{normalized}"
+
+    def resolve_api_key(self) -> str | None:
+        """Default-profile credential: env var first, then the config file.
+
+        The env var wins when both are set, matching ``a2aorch.resolve_token`` and
+        ``http.resolve_token``. A deployment whose launcher does not load the
+        Hermes ``.env`` can supply ``hermes.api.api_key`` instead, so the bare
+        (unprofiled) path still authenticates. Named profiles never consult this:
+        their credential comes from their own ``.env``.
+        """
+
+        env_key = os.environ.get(self.api_key_env) if self.api_key_env else None
+        if env_key:
+            return env_key
+        return self.api_key
 
 
 class A2AOrchApiConfig(BaseModel):
@@ -512,7 +534,7 @@ class ToolkitMcpConfig(BaseModel):
             "cli": str(self.hermes.cli),
             "api_base_url": self.hermes.api.base_url,
             "a2aorch_base_url": self.a2aorch.base_url,
-            "api_key_env_present": bool(os.environ.get(self.hermes.api.api_key_env)),
+            "api_key_env_present": bool(self.hermes.api.resolve_api_key()),
             "a2aorch_token_env_present": bool(os.environ.get(self.a2aorch.token_env)),
             "a2aorch_token_present": bool(self.a2aorch.resolve_token()),
             "toolkit_root": str(self.toolkit.root),

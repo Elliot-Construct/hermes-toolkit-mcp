@@ -218,6 +218,7 @@ hermes:
   api:
     base_url: "http://127.0.0.1:8642/v1"
     api_key_env: API_SERVER_KEY   # the default profile's credential
+    api_key: null                 # direct fallback for launchers that do not load the Hermes .env
     profile_prefix: "/p/{profile}"      # multiplex route prefix
     profile_api_key_name: API_SERVER_KEY  # always this name; no <PROFILE>_ prefix
     profile_api_key_min_length: 16        # mirrors the gateway's own check

@@ -664,7 +664,8 @@ class HermesApiClient:
         """Resolved bearer credential for the origin serving this path.
 
         The a2aorch gateway accepts a token from its env var or from the config
-        file (env wins); the Hermes API surface only ever reads its env var.
+        file (env wins); the Hermes API surface reads its env var, falling back to
+        ``hermes.api.api_key`` for launchers that do not load the Hermes ``.env``.
         This is the *default-profile* answer and is reported in the receipt's
         ``auth`` block for continuity; the credential actually sent is
         ``routing.credential``, which for a named profile comes from that
@@ -674,8 +675,7 @@ class HermesApiClient:
         normalized = self._api_surface_path(path)
         if normalized.startswith("/api/v1"):
             return self.config.a2aorch.resolve_token()
-        _, key_env = self._origin_for_path(normalized)
-        return os.environ.get(key_env) if key_env else None
+        return self.config.hermes.api.resolve_api_key()
 
     def _write_request_receipt(
         self,

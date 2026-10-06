@@ -50,6 +50,8 @@ Failures are distinct and actionable rather than a generic status code:
 | `PROFILE_NOT_ROUTABLE` | the route has no multiplex mirror, so the argument is refused rather than sent in a body where it would not route. |
 | `PROFILE_NOT_SELECTABLE` | the named profile is withheld (`hermes.hidden_profiles`). Omit the argument to use the default home. |
 
+The default profile's credential resolves **env var first, then `hermes.api.api_key`** — a launcher that does not load the Hermes `.env` can still authenticate the bare path. That fallback is the default credential only; a named profile's key always comes from its own `.env`.
+
 Request receipts record a `profile_routing` block (`profile`, `profiled`, `route_prefix`, `credential_source`, `key_name`, `key_env_path`, `credential_present`). Presence and names only — no key value appears in any receipt, envelope, log line or git object. `profile` is `null` for an unprofiled request: the default home is the *absence* of a profile, so it is never named.
 
 ## Shared output envelope

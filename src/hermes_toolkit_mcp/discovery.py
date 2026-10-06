@@ -198,7 +198,8 @@ def resolve_scope(config: ToolkitMcpConfig, arguments: dict[str, Any] | None = N
         "artifact_root": resolve_path(config.artifacts.root),
         "api_base_url": config.hermes.api.base_url,
         "api_key_env": config.hermes.api.api_key_env,
-        "api_key_env_present": bool(os.environ.get(config.hermes.api.api_key_env)),
+        # Presence only — the value never enters a scope summary.
+        "api_key_env_present": bool(config.hermes.api.resolve_api_key()),
     }
 
 
