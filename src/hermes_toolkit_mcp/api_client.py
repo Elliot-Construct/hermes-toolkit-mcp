@@ -675,7 +675,7 @@ class HermesApiClient:
         normalized = self._api_surface_path(path)
         if normalized.startswith("/api/v1"):
             return self.config.a2aorch.resolve_token()
-        return self.config.hermes.api.resolve_api_key()
+        return self.config.hermes.api.resolve_api_key(self.config.hermes.default_env_path())
 
     def _write_request_receipt(
         self,

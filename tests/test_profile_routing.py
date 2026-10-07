@@ -785,6 +785,79 @@ def test_config_summary_reports_presence_without_the_value(tmp_path: Path) -> No
     assert "cfg-" + "K" * 32 not in repr(summary)
 
 
+def test_default_credential_falls_back_to_the_root_env_file(
+    tmp_path: Path, gateway: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no env var and no config key, the root .env supplies the credential.
+
+    That is the launcher-independent path: the same file the gateway reads, so
+    rotating the key there moves both together and the toolkit config needs no
+    copy of the secret.
+    """
+
+    monkeypatch.delenv("HERMES_TOOLKIT_TEST_API_KEY", raising=False)
+    root = tmp_path / "home"
+    root.mkdir()
+    (root / ".env").write_text(f"API_SERVER_KEY={DEFAULT_KEY}\n", encoding="utf-8")
+
+    config = _config(tmp_path, api_base_url=gateway, home=root)
+    result = _run_tool("hermes_api_runs_start", {"prompt": "hello"}, config)
+
+    assert result["ok"] is True, result
+    assert _ProfileAwareHandler.calls[-1]["headers"]["Authorization"] == f"Bearer {DEFAULT_KEY}"
+    receipt = json.loads((Path(result["artifact_dir"]) / "request-receipt.json").read_text(encoding="utf-8"))
+    assert receipt["profile_routing"]["credential_source"] == "process_env"
+    assert receipt["profile_routing"]["credential_present"] is True
+
+
+def test_default_credential_precedence_env_then_config_then_env_file(tmp_path: Path) -> None:
+    """Env var beats config key beats the root .env."""
+
+    from hermes_toolkit_mcp.config import ToolkitMcpConfig as Cfg
+
+    root = tmp_path / "home"
+    root.mkdir()
+    env_file = root / ".env"
+    env_file.write_text("API_SERVER_KEY=" + "fromfile" + "F" * 24 + "\n", encoding="utf-8")
+
+    api = Cfg.from_mapping({"hermes": {"api": {"api_key_env": "HERMES_TOOLKIT_TEST_API_KEY"}}}).hermes.api
+    assert api.resolve_api_key(env_file) == "fromfile" + "F" * 24
+
+    with_config = Cfg.from_mapping(
+        {"hermes": {"api": {"api_key_env": "HERMES_TOOLKIT_TEST_API_KEY", "api_key": "fromconfig" + "C" * 24}}}
+    ).hermes.api
+    assert with_config.resolve_api_key(env_file) == "fromconfig" + "C" * 24
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setenv("HERMES_TOOLKIT_TEST_API_KEY", "fromenv" + "E" * 24)
+    try:
+        assert with_config.resolve_api_key(env_file) == "fromenv" + "E" * 24
+    finally:
+        monkeypatch.undo()
+
+
+def test_default_env_file_is_not_used_for_a_named_profile(
+    tmp_path: Path, gateway: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The root .env is the DEFAULT credential — a named profile never borrows it."""
+
+    monkeypatch.delenv("HERMES_TOOLKIT_TEST_API_KEY", raising=False)
+    root = tmp_path / "home"
+    (root / "profiles" / "arthur").mkdir(parents=True)
+    (root / ".env").write_text(f"API_SERVER_KEY={DEFAULT_KEY}\n", encoding="utf-8")
+    # arthur has NO key of its own.
+
+    result = _run_tool(
+        "hermes_api_runs_start",
+        {"prompt": "hello", "profile": "arthur"},
+        _config(tmp_path, api_base_url=gateway, home=root),
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "PROFILE_KEY_MISSING"
+    assert _ProfileAwareHandler.calls == []
+
+
 # ---------------------------------------------------------------------------
 # Hidden profiles: never selectable, never routable
 # ---------------------------------------------------------------------------

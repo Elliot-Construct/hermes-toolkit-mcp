@@ -8,13 +8,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
-- **`hermes.api.api_key`** — a direct credential for the default profile, for
-  deployments whose launcher does not load the Hermes `.env` into the process
-  environment. The env var wins when both are set, matching `a2aorch.token` and
-  `http.token`. It is the **default** credential only: a named profile's key is
-  always read from that profile's own `.env`, so one profile can never borrow
-  the owner's key. Store it in a config file with restrictive ACLs (the repo's
-  own deployed config uses `Elliot:RW, Administrators:R, SYSTEM:R`).
+- **`hermes.api.api_key`** — an explicit deployment override for the default
+  profile's credential. It is the **second** source in a three-step precedence:
+  `API_SERVER_KEY` in the process environment, then `hermes.api.api_key`, then the
+  Hermes root home's `.env` — the same file the gateway itself reads, so rotating
+  the key there moves both together and no copy of the secret need be stored in
+  the toolkit config. It is the **default** credential only: a named profile's key
+  is always read from that profile's own `.env`, so one profile can never borrow
+  the owner's key.
 
 - **Profile routing by URL + profile-scoped key.** `hermes_api_runs_start` (and
   the other Runs API wrappers) accept a `profile` argument that is expressed in

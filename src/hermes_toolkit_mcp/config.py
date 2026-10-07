@@ -99,20 +99,39 @@ class HermesApiConfig(BaseModel):
         normalized = path if path.startswith("/") else f"/{path}"
         return f"{self.profile_prefix.format(profile=profile)}{normalized}"
 
-    def resolve_api_key(self) -> str | None:
-        """Default-profile credential: env var first, then the config file.
+    def resolve_api_key(self, env_file: Path | None = None) -> str | None:
+        """Default-profile credential, in precedence order.
 
-        The env var wins when both are set, matching ``a2aorch.resolve_token`` and
-        ``http.resolve_token``. A deployment whose launcher does not load the
-        Hermes ``.env`` can supply ``hermes.api.api_key`` instead, so the bare
-        (unprofiled) path still authenticates. Named profiles never consult this:
-        their credential comes from their own ``.env``.
+        1. ``api_key_env`` in the process environment — a launch-time override.
+        2. ``api_key`` in the config file — an explicit deployment override.
+        3. ``env_file`` — the Hermes root home's ``.env``, which is the same
+           source the gateway itself reads.
+
+        Step 3 is what lets a launcher that never loads the ``.env`` still
+        authenticate the bare (unprofiled) path without a second copy of the
+        secret: rotating the key in ``.env`` moves both the gateway and this
+        toolkit together. The first two steps stay so an operator can override
+        explicitly, and the env var keeps winning — the same shape as
+        ``a2aorch.resolve_token`` and ``http.resolve_token``.
+
+        A named profile never consults any of this: its credential comes from its
+        own ``.env``, so one profile cannot borrow the owner's key.
         """
 
         env_key = os.environ.get(self.api_key_env) if self.api_key_env else None
         if env_key:
             return env_key
-        return self.api_key
+        if self.api_key:
+            return self.api_key
+        if env_file is not None:
+            # Imported lazily: ``api_client`` imports this module, so a top-level
+            # import would be circular.
+            from .api_client import read_env_file
+
+            file_key = read_env_file(Path(env_file)).get(self.profile_api_key_name)
+            if file_key:
+                return file_key.strip() or None
+        return None
 
 
 class A2AOrchApiConfig(BaseModel):
@@ -432,6 +451,16 @@ class HermesConfig(BaseModel):
 
         return self.profile_home(profile) / ".env"
 
+    def default_env_path(self) -> Path:
+        """``<root home>/.env`` — the gateway's own default-profile credential file.
+
+        The same file the gateway reads, so rotating the key there moves both the
+        gateway and this toolkit together. Used as the last-resort source for the
+        default profile's credential (see ``HermesApiConfig.resolve_api_key``).
+        """
+
+        return self.root_home() / ".env"
+
 
 class ToolkitConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -534,7 +563,7 @@ class ToolkitMcpConfig(BaseModel):
             "cli": str(self.hermes.cli),
             "api_base_url": self.hermes.api.base_url,
             "a2aorch_base_url": self.a2aorch.base_url,
-            "api_key_env_present": bool(self.hermes.api.resolve_api_key()),
+            "api_key_env_present": bool(self.hermes.api.resolve_api_key(self.hermes.default_env_path())),
             "a2aorch_token_env_present": bool(os.environ.get(self.a2aorch.token_env)),
             "a2aorch_token_present": bool(self.a2aorch.resolve_token()),
             "toolkit_root": str(self.toolkit.root),

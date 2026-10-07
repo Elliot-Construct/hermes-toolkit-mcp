@@ -199,7 +199,7 @@ def resolve_scope(config: ToolkitMcpConfig, arguments: dict[str, Any] | None = N
         "api_base_url": config.hermes.api.base_url,
         "api_key_env": config.hermes.api.api_key_env,
         # Presence only — the value never enters a scope summary.
-        "api_key_env_present": bool(config.hermes.api.resolve_api_key()),
+        "api_key_env_present": bool(config.hermes.api.resolve_api_key(config.hermes.default_env_path())),
     }
 
 
