@@ -268,12 +268,15 @@ def build_login_routes(
                 extra_headers={"Retry-After": str(retry_after)},
             )
 
-        # (b) CSRF guard: a cross-origin page may POST here but must not be
-        # able to drive *our* origin's form.  An absent Origin header is
-        # tolerated (some clients omit it); the unguessable 128-bit request
-        # id remains the primary defence either way.
+        # (b) CSRF guard: reject only a sandboxed/ambiguous Origin (null),
+        # which is what a hidden iframe or data: URL would send.  A real
+        # browser client sends its own origin (e.g. https://chatgpt.com) —
+        # that is not a CSRF vector here, because the unguessable 128-bit
+        # request id is the primary defence and is only ever sent to the
+        # browser via the /authorize redirect.  Checking Origin against the
+        # issuer host would block every legitimate cross-origin MCP client.
         origin_header = request.headers.get("origin")
-        if origin_header is not None and urlsplit(origin_header).netloc.lower() != issuer_host:
+        if origin_header is not None and urlsplit(origin_header).scheme in ("", "null"):
             return _notice_response(CSRF_ERROR, status_code=403, issuer_origin=issuer_origin)
 
         # (c) The form must be complete before the flow is touched.
