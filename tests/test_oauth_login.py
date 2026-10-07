@@ -210,23 +210,30 @@ def test_post_with_a_missing_field_is_400_and_never_reaches_the_flow(
 # --- POST: CSRF, rate limiting ----------------------------------------------
 
 
-def test_post_from_a_foreign_origin_is_rejected_but_the_issuer_origin_passes(
+def test_post_from_a_real_browser_origin_is_accepted_but_a_sandboxed_origin_is_rejected(
     client: TestClient,
 ) -> None:
-    rejected = client.post(
-        "/login",
-        data=_credentials(),
-        headers={"Origin": "https://evil.example"},
-        follow_redirects=False,
-    )
-    assert rejected.status_code == 403
+    """A real browser client sends its own origin (e.g. https://chatgpt.com).
+
+    That is not a CSRF vector here: the unguessable 128-bit request id is the
+    primary defence and is only ever sent to the browser via the /authorize
+    redirect.  Only a sandboxed/ambiguous Origin (null) is rejected — that is
+    what a hidden iframe or data: URL would send.
+    """
     accepted = client.post(
         "/login",
         data=_credentials(),
-        headers={"Origin": ISSUER_ORIGIN},
+        headers={"Origin": "https://chatgpt.com"},
         follow_redirects=False,
     )
     assert accepted.status_code == 302
+    rejected = client.post(
+        "/login",
+        data=_credentials(),
+        headers={"Origin": "null"},
+        follow_redirects=False,
+    )
+    assert rejected.status_code == 403
 
 
 def test_absent_origin_header_is_tolerated(client: TestClient) -> None:
