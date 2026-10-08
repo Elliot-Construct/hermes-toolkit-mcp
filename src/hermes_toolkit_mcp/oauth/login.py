@@ -96,15 +96,31 @@ def _issuer_origin(issuer: str) -> str:
     return f"{parts.scheme}://{parts.netloc}"
 
 
-def _security_headers(issuer_origin: str) -> dict[str, str]:
+def _form_action(issuer: str) -> str:
+    """Absolute URL the login form posts to, with the mount prefix intact.
+
+    The form must name the PUBLIC path: the reverse proxy strips the mount
+    prefix on the way in, so a relative action would resolve against the
+    prefixed public URL and 404.
+    """
+    return f"{issuer.rstrip('/')}/login"
+
+
+def _security_headers(issuer: str) -> dict[str, str]:
     """Headers carried by every response this module produces.
 
     ``no-store`` because the page reflects a live authentication attempt;
     ``DENY`` and ``no-referrer`` because a login form framed or leaking its
     URL to a third party is a phishing aid; the CSP allows only our own
-    inline style and form submissions to ``'self'`` plus the issuer's origin
-    (the form action is absolute — see the module docstring), so a reflected
-    value that slipped past ``html.escape`` still cannot execute or exfiltrate.
+    inline style and form submissions to ``'self'`` plus the issuer's origin,
+    so a reflected value that slipped past ``html.escape`` still cannot
+    execute or exfiltrate.
+
+    ``form-action`` names the form's OWN target (``_form_action``) as well as
+    ``'self'``. Both are derived from the same issuer string, so a configured
+    mount prefix can never put the form outside the header that is supposed
+    to permit it: ``'self'`` alone resolves to the directory of the page, and
+    the bare origin would not cover ``/hermestoolkit/login``.
     """
     return {
         "Cache-Control": "no-store",
@@ -113,7 +129,7 @@ def _security_headers(issuer_origin: str) -> dict[str, str]:
         "Content-Security-Policy": (
             "default-src 'none'; "
             "style-src 'unsafe-inline'; "
-            f"form-action 'self' {issuer_origin}; "
+            f"form-action 'self' {_form_action(issuer)} {_issuer_origin(issuer)}; "
             "base-uri 'none'"
         ),
     }
@@ -146,10 +162,10 @@ def _html_response(
     page: str,
     *,
     status_code: int,
-    issuer_origin: str,
+    issuer: str,
     extra_headers: dict[str, str] | None = None,
 ) -> HTMLResponse:
-    headers = _security_headers(issuer_origin)
+    headers = _security_headers(issuer)
     if extra_headers:
         headers.update(extra_headers)
     return HTMLResponse(page, status_code=status_code, headers=headers)
@@ -159,7 +175,7 @@ def _notice_response(
     message: str,
     *,
     status_code: int,
-    issuer_origin: str,
+    issuer: str,
     extra_headers: dict[str, str] | None = None,
 ) -> HTMLResponse:
     """A short status page carrying one message and the standard headers.
@@ -177,7 +193,7 @@ def _notice_response(
     return _html_response(
         _page(SERVICE_NAME, body),
         status_code=status_code,
-        issuer_origin=issuer_origin,
+        issuer=issuer,
         extra_headers=extra_headers,
     )
 
@@ -194,7 +210,7 @@ def _form_body(view: LoginRequestView, *, issuer: str, error: str | None = None)
     """
     client_name = view.client_name or "an unnamed client"
     scopes = ", ".join(view.scopes) if view.scopes else "none requested"
-    action = html.escape(f"{issuer.rstrip('/')}/login")
+    action = html.escape(_form_action(issuer))
     request_id = html.escape(view.request_id)
 
     parts = [
@@ -241,7 +257,6 @@ def build_login_routes(
     A GET is a page view, not an authentication attempt, so counting it would
     let a curious refresh lock the real user out of her own form.
     """
-    issuer_origin = _issuer_origin(issuer)
     issuer_host = urlsplit(issuer).netloc.lower()
 
     async def handle_get(request: Request) -> Response:
@@ -250,9 +265,9 @@ def build_login_routes(
         # status, so id probing learns nothing.
         view = flow.peek_login_request(request_id) if request_id else None
         if view is None:
-            return _notice_response(EXPIRED_ERROR, status_code=400, issuer_origin=issuer_origin)
+            return _notice_response(EXPIRED_ERROR, status_code=400, issuer=issuer)
         page = _page(SERVICE_NAME, _form_body(view, issuer=issuer))
-        return _html_response(page, status_code=200, issuer_origin=issuer_origin)
+        return _html_response(page, status_code=200, issuer=issuer)
 
     async def handle_post(request: Request) -> Response:
         # (a) Rate limit first, before anything is parsed: on a rejected
@@ -264,7 +279,7 @@ def build_login_routes(
             return _notice_response(
                 f"Too many sign-in attempts. Try again in {retry_after} seconds.",
                 status_code=429,
-                issuer_origin=issuer_origin,
+                issuer=issuer,
                 extra_headers={"Retry-After": str(retry_after)},
             )
 
@@ -289,14 +304,14 @@ def build_login_routes(
         username = form.get("username")
         password = form.get("password")
         if not (isinstance(request_id, str) and isinstance(username, str) and isinstance(password, str)):
-            return _notice_response(MISSING_FIELDS_ERROR, status_code=400, issuer_origin=issuer_origin)
+            return _notice_response(MISSING_FIELDS_ERROR, status_code=400, issuer=issuer)
 
         # (d) Hand everything to the flow and translate its refusal.
         try:
             location = flow.login(request_id, username, password)
         except LoginError as exc:
             if exc.code == UNKNOWN_REQUEST:
-                return _notice_response(EXPIRED_ERROR, status_code=400, issuer_origin=issuer_origin)
+                return _notice_response(EXPIRED_ERROR, status_code=400, issuer=issuer)
             if exc.code == INVALID_CREDENTIALS:
                 logger.warning("oauth login refused (invalid credentials) caller=%s", key)
                 # 200 with the same form: the request survives a wrong
@@ -319,12 +334,12 @@ def build_login_routes(
                     SERVICE_NAME,
                     _form_body(view, issuer=issuer, error=GENERIC_CREDENTIALS_ERROR),
                 )
-                return _html_response(page, status_code=200, issuer_origin=issuer_origin)
-            return _notice_response(GENERIC_FAILURE_ERROR, status_code=400, issuer_origin=issuer_origin)
+                return _html_response(page, status_code=200, issuer=issuer)
+            return _notice_response(GENERIC_FAILURE_ERROR, status_code=400, issuer=issuer)
 
         # Success: absolute location (the proxy strips, so a relative one
         # would point at the wrong public path) and nothing may cache it.
-        return RedirectResponse(location, status_code=302, headers=_security_headers(issuer_origin))
+        return RedirectResponse(location, status_code=302, headers=_security_headers(issuer))
 
     async def login_endpoint(request: Request) -> Response:
         if request.method == "POST":

@@ -17,6 +17,7 @@ What the suite is really checking, beyond happy paths:
 from __future__ import annotations
 
 import html
+import re
 
 import pytest
 from starlette.applications import Starlette
@@ -315,6 +316,39 @@ def test_a_cross_origin_or_sandboxed_post_is_accepted(client: TestClient) -> Non
             follow_redirects=False,
         )
         assert response.status_code == 302, f"{origin} was refused with {response.status_code}"
+
+
+def test_the_csp_permits_the_form_the_page_actually_serves(client: TestClient) -> None:
+    """``form-action`` must cover the page's own ``action`` attribute.
+
+    The page is served from a MOUNTED path (``/hermestoolkit/login``) while
+    the backend route is unmounted — the reverse proxy strips the prefix —
+    so the form's action is the full public URL. ``'self'`` alone resolves to
+    that mounted directory, and a bare-origin entry carries no path, so
+    without the action itself in the allow-list the browser blocks our own
+    form with "violates the following Content Security Policy directive".
+
+    Asserting only that a CSP header exists is what let this ship, so parse
+    the two values and compare them.
+    """
+    response = client.get(f"/login?request={KNOWN_REQUEST}")
+    csp = response.headers["content-security-policy"]
+    form_action = re.search(r'<form[^>]*action="([^"]+)"', response.text).group(1)
+
+    allowed = set()
+    for directive in csp.split(";"):
+        if directive.strip().startswith("form-action"):
+            allowed = {part.strip().strip("'") for part in directive.split()[2:]}
+    assert form_action in allowed, (
+        f"form posts to {form_action} but form-action only allows {sorted(allowed)}"
+    )
+
+
+def test_a_relative_origin_entry_cannot_cover_the_mounted_path(client: TestClient) -> None:
+    """The bare origin must ALSO be present, so a bare-path deployment still works."""
+    response = client.get(f"/login?request={KNOWN_REQUEST}")
+    csp = response.headers["content-security-policy"]
+    assert f"'self' {ISSUER.rsplit('/', 1)[0]}" in csp
 
 
 def test_every_response_carries_the_security_headers(client: TestClient) -> None:
