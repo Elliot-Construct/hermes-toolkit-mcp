@@ -268,16 +268,20 @@ def build_login_routes(
                 extra_headers={"Retry-After": str(retry_after)},
             )
 
-        # (b) CSRF guard: reject only a sandboxed/ambiguous Origin (null),
-        # which is what a hidden iframe or data: URL would send.  A real
-        # browser client sends its own origin (e.g. https://chatgpt.com) —
-        # that is not a CSRF vector here, because the unguessable 128-bit
-        # request id is the primary defence and is only ever sent to the
-        # browser via the /authorize redirect.  Checking Origin against the
-        # issuer host would block every legitimate cross-origin MCP client.
+        # (b) CSRF guard. The primary defence is the unguessable 128-bit
+        # request id in the hidden form field: it is minted by /authorize and
+        # only ever delivered to the browser that followed that redirect, so
+        # a third-party page cannot know it, and it is single-use.
+        #
+        # Origin is therefore used only to reject what is *provably* hostile:
+        # a form post from a third-party web page. But a foreign origin is NOT
+        # proof of that — an MCP connector opens this form cross-origin by
+        # design (ChatGPT sends ``Origin: https://chatgpt.com``, and its
+        # in-app browser sends ``Origin: null`` from a sandboxed frame), and
+        # both are legitimate. Comparing against the issuer instead blocked
+        # the only client this server exists for. So the header is recorded
+        # for diagnostics only and the request id carries the defence.
         origin_header = request.headers.get("origin")
-        if origin_header is not None and urlsplit(origin_header).scheme in ("", "null"):
-            return _notice_response(CSRF_ERROR, status_code=403, issuer_origin=issuer_origin)
 
         # (c) The form must be complete before the flow is touched.
         form = await request.form()

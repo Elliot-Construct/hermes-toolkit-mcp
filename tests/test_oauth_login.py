@@ -29,6 +29,7 @@ from hermes_toolkit_mcp.oauth.interfaces import (
     LoginRequestView,
 )
 from hermes_toolkit_mcp.oauth.login import (
+    CSRF_ERROR,
     EXPIRED_ERROR,
     GENERIC_CREDENTIALS_ERROR,
     build_login_routes,
@@ -210,15 +211,13 @@ def test_post_with_a_missing_field_is_400_and_never_reaches_the_flow(
 # --- POST: CSRF, rate limiting ----------------------------------------------
 
 
-def test_post_from_a_real_browser_origin_is_accepted_but_a_sandboxed_origin_is_rejected(
-    client: TestClient,
-) -> None:
+def test_post_from_a_real_browser_origin_is_accepted(client: TestClient) -> None:
     """A real browser client sends its own origin (e.g. https://chatgpt.com).
 
-    That is not a CSRF vector here: the unguessable 128-bit request id is the
-    primary defence and is only ever sent to the browser via the /authorize
-    redirect.  Only a sandboxed/ambiguous Origin (null) is rejected — that is
-    what a hidden iframe or data: URL would send.
+    That is not a CSRF vector here: the unguessable 128-bit request id is
+    the primary defence and is only ever sent to the browser via the
+    /authorize redirect. Cross-origin is the EXPECTED case for an MCP
+    connector, so a foreign named origin must be accepted.
     """
     accepted = client.post(
         "/login",
@@ -227,13 +226,28 @@ def test_post_from_a_real_browser_origin_is_accepted_but_a_sandboxed_origin_is_r
         follow_redirects=False,
     )
     assert accepted.status_code == 302
-    rejected = client.post(
+
+
+def test_post_with_a_null_origin_is_accepted(client: TestClient) -> None:
+    """``Origin: null`` is what a sandboxed frame or cross-origin redirect sends.
+
+    ChatGPT opens the login form in exactly such a context, so rejecting it
+    locked out the only client this server serves. The request id, not the
+    Origin header, is what stands against a forged sign-in.
+    """
+    accepted = client.post(
         "/login",
         data=_credentials(),
         headers={"Origin": "null"},
         follow_redirects=False,
     )
-    assert rejected.status_code == 403
+    assert accepted.status_code == 302
+
+
+def test_post_with_no_origin_header_is_accepted(client: TestClient) -> None:
+    """Some clients omit Origin entirely; the request id carries the day."""
+    accepted = client.post("/login", data=_credentials(), follow_redirects=False)
+    assert accepted.status_code == 302
 
 
 def test_absent_origin_header_is_tolerated(client: TestClient) -> None:
@@ -282,6 +296,25 @@ def test_page_views_do_not_consume_the_rate_limit(client: TestClient) -> None:
 
 
 # --- response headers --------------------------------------------------------
+
+
+def test_a_cross_origin_or_sandboxed_post_is_accepted(client: TestClient) -> None:
+    """A foreign named origin is legitimate, not a CSRF vector.
+
+    An MCP connector opens this form cross-origin by design: ChatGPT sends
+    ``Origin: https://chatgpt.com``, and its in-app browser sends
+    ``Origin: null`` from a sandboxed frame. Rejecting either locked out the
+    only client this server serves. The single-use request id carries the
+    defence, not the Origin header.
+    """
+    for origin in ("https://chatgpt.com", "null", "https://evil.example.com"):
+        response = client.post(
+            "/login",
+            data=_credentials(),
+            headers={"Origin": origin},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302, f"{origin} was refused with {response.status_code}"
 
 
 def test_every_response_carries_the_security_headers(client: TestClient) -> None:
