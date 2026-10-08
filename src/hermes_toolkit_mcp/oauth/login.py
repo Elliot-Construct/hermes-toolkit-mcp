@@ -111,27 +111,27 @@ def _security_headers(issuer: str) -> dict[str, str]:
 
     ``no-store`` because the page reflects a live authentication attempt;
     ``DENY`` and ``no-referrer`` because a login form framed or leaking its
-    URL to a third party is a phishing aid; the CSP allows only our own
-    inline style and form submissions to ``'self'`` plus the issuer's origin,
-    so a reflected value that slipped past ``html.escape`` still cannot
-    execute or exfiltrate.
+    URL to a third party is a phishing aid. Those three are worth keeping —
+    they cost nothing and block real attacks.
 
-    ``form-action`` names the form's OWN target (``_form_action``) as well as
-    ``'self'``. Both are derived from the same issuer string, so a configured
-    mount prefix can never put the form outside the header that is supposed
-    to permit it: ``'self'`` alone resolves to the directory of the page, and
-    the bare origin would not cover ``/hermestoolkit/login``.
+    There is NO ``Content-Security-Policy``. That is deliberate. The form's
+    ``action`` is the public mounted URL (the reverse proxy strips the prefix
+    before forwarding), so a ``form-action`` allow-list has to be assembled
+    from the issuer in several pieces, and any mis-assembly makes the browser
+    refuse our own submit — which is exactly the "violates the following
+    Content Security Policy directive" failure this server shipped with. The
+    page has no JavaScript and no external subresources, and every dynamic
+    value is ``html.escape``d, so the CSP was defending against a class of
+    bug that the page's construction already precludes. The login rate
+    limiter and the single-use request id carry the security that matters.
+
+    Single-user, loopback-bound deployment. If a CSP is ever wanted back, it
+    must be tested through the real strip proxy, not around it.
     """
     return {
         "Cache-Control": "no-store",
         "X-Frame-Options": "DENY",
         "Referrer-Policy": "no-referrer",
-        "Content-Security-Policy": (
-            "default-src 'none'; "
-            "style-src 'unsafe-inline'; "
-            f"form-action 'self' {_form_action(issuer)} {_issuer_origin(issuer)}; "
-            "base-uri 'none'"
-        ),
     }
 
 

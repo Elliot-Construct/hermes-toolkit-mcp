@@ -318,37 +318,40 @@ def test_a_cross_origin_or_sandboxed_post_is_accepted(client: TestClient) -> Non
         assert response.status_code == 302, f"{origin} was refused with {response.status_code}"
 
 
-def test_the_csp_permits_the_form_the_page_actually_serves(client: TestClient) -> None:
-    """``form-action`` must cover the page's own ``action`` attribute.
+def test_the_form_posts_to_the_public_path(client: TestClient) -> None:
+    """The form's action must be the PUBLIC mounted URL, not the unmounted one.
 
-    The page is served from a MOUNTED path (``/hermestoolkit/login``) while
-    the backend route is unmounted — the reverse proxy strips the prefix —
-    so the form's action is the full public URL. ``'self'`` alone resolves to
-    that mounted directory, and a bare-origin entry carries no path, so
-    without the action itself in the allow-list the browser blocks our own
-    form with "violates the following Content Security Policy directive".
-
-    Asserting only that a CSP header exists is what let this ship, so parse
-    the two values and compare them.
+    The reverse proxy strips ``/hermestoolkit`` before forwarding, so the
+    backend route is ``/login`` while the browser sits on
+    ``/hermestoolkit/login``. A relative action would resolve against the
+    public path and 404, so it has to be absolute — and this asserts it names
+    the public one. There is deliberately no ``form-action`` CSP to keep in
+    step with it (see ``_security_headers``).
     """
     response = client.get(f"/login?request={KNOWN_REQUEST}")
-    csp = response.headers["content-security-policy"]
-    form_action = re.search(r'<form[^>]*action="([^"]+)"', response.text).group(1)
-
-    allowed = set()
-    for directive in csp.split(";"):
-        if directive.strip().startswith("form-action"):
-            allowed = {part.strip().strip("'") for part in directive.split()[2:]}
-    assert form_action in allowed, (
-        f"form posts to {form_action} but form-action only allows {sorted(allowed)}"
+    action = re.search(r'<form[^>]*action="([^"]+)"', response.text)
+    assert action, f"no form action in the page: {response.text[:400]!r}"
+    assert action.group(1) == f"{ISSUER}/login", (
+        f"form posts to {action.group(1)!r}; behind the strip proxy it must name "
+        f"the public path {ISSUER}/login"
     )
 
 
-def test_a_relative_origin_entry_cannot_cover_the_mounted_path(client: TestClient) -> None:
-    """The bare origin must ALSO be present, so a bare-path deployment still works."""
+def test_the_page_carries_no_script_and_no_external_subresource(client: TestClient) -> None:
+    """Why dropping the CSP is safe: there is nothing for it to constrain.
+
+    No ``<script>``, no external stylesheet or image, no inline event handler.
+    Every dynamic value is ``html.escape``d by ``_form_body``. If a future edit
+    adds scripting or a subresource, this fails and the CSP conversation has
+    to be reopened.
+    """
     response = client.get(f"/login?request={KNOWN_REQUEST}")
-    csp = response.headers["content-security-policy"]
-    assert f"'self' {ISSUER.rsplit('/', 1)[0]}" in csp
+    body = response.text
+    lowered = body.lower()
+    assert "<script" not in lowered, "the login page gained a script tag"
+    for pattern in ("onerror=", "onload=", "onclick=", "javascript:"):
+        assert pattern not in lowered, f"the login page gained an inline handler: {pattern}"
+    assert 'src="http' not in lowered, "the login page gained an external subresource"
 
 
 def test_every_response_carries_the_security_headers(client: TestClient) -> None:
@@ -365,8 +368,9 @@ def test_every_response_carries_the_security_headers(client: TestClient) -> None
         assert response.headers["x-frame-options"] == "DENY"
         assert response.headers["referrer-policy"] == "no-referrer"
         assert response.headers["cache-control"] == "no-store"
-        csp = response.headers["content-security-policy"]
-        assert "form-action" in csp
-        assert ISSUER_ORIGIN in csp
-        assert "base-uri 'none'" in csp
-        assert "default-src 'none'" in csp
+        # No Content-Security-Policy by design: the form's action is the
+        # public MOUNTED URL while the backend route is unmounted, so any
+        # form-action allow-list assembled from the issuer risks refusing our
+        # own submit in the browser. The page has no JavaScript and no
+        # external subresources, so there is nothing for a CSP to constrain.
+        assert "content-security-policy" not in response.headers

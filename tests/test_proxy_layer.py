@@ -160,20 +160,25 @@ def _authorize_through_proxy(client: TestClient, client_name: str) -> tuple[str,
     return login_url, parse_qs(urlsplit(login_url).query)["request"][0]
 
 
-def test_the_served_csp_permits_the_served_form_action(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The bug that shipped: the form's action and the CSP must agree.
+def test_the_proxied_form_posts_to_the_public_path_it_is_served_from(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The form's action must be the public URL the browser is actually on.
 
-    Behind the strip proxy the page is served from the PUBLIC mounted path, so
-    its form posts to ``https://host/hermestoolkit/login``. ``'self'`` resolves
-    to that mounted directory, and a bare-origin entry carries no path — so a
-    ``form-action`` that omits the action itself blocks our own submit.
+    Behind the strip proxy the page is served from ``/hermestoolkit/login``
+    while the backend route is unmounted ``/login``. A relative action, or one
+    naming the unmounted path, breaks in a browser and nowhere else — which is
+    why this goes through the proxy.
 
-    Calling the app directly cannot catch this: there the page lives at
-    ``/login`` and ``'self'`` happens to cover it.
+    There is deliberately no ``form-action`` CSP to keep in step with the
+    action: assembling one from the issuer produced the exact
+    "violates the following Content Security Policy directive" failure this
+    server shipped with, twice. See ``_security_headers`` for why the page is
+    safe without it.
     """
     client = _client(tmp_path, monkeypatch)
     with client:
-        login_url, _request_id = _authorize_through_proxy(client, "proxy-csp-test")
+        login_url, _request_id = _authorize_through_proxy(client, "proxy-form-test")
         form = client.get(_public_url(login_url))
 
     assert form.status_code == 200, form.text
@@ -181,22 +186,16 @@ def test_the_served_csp_permits_the_served_form_action(tmp_path: Path, monkeypat
     assert action, f"no form action in the page: {form.text[:400]!r}"
     action_url = action.group(1)
 
-    # The action must be the PUBLIC path, not the unmounted one.
     assert action_url == f"{ISSUER}/login", (
         f"form posts to {action_url!r}; behind the strip proxy it must name the "
         f"public path {ISSUER}/login"
     )
-
-    # And the CSP served WITH that page must cover it.
-    csp = form.headers["content-security-policy"]
-    allowed = set()
-    for directive in csp.split(";"):
-        if directive.strip().startswith("form-action"):
-            allowed = {p.strip().strip("'") for p in directive.split()[2:]}
-    assert action_url in allowed, (
-        f"form posts to {action_url} but form-action only allows {sorted(allowed)} -- "
-        f"the browser blocks this submit: 'violates the following Content Security "
-        f"Policy directive'"
+    # And nothing that a CSP would have been there to constrain.
+    lowered = form.text.lower()
+    assert "<script" not in lowered, "the proxied page gained a script tag"
+    assert "content-security-policy" not in form.headers, (
+        "a CSP is being served again; it must be re-verified in a real browser "
+        "before it is, because the last two attempts blocked this form"
     )
 
 
