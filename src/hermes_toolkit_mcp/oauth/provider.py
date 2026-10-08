@@ -165,10 +165,42 @@ class ToolkitOAuthProvider(
     # -- clients (dynamic registration, contract §3.3-3.4) ----------------
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
-        """The registered client, or ``None`` for anything unknown."""
+        """The registered client, a config-pinned client, or ``None``.
+
+        ``None`` is the answer for anything this server did not register and
+        did not pin: an unknown id must never be able to start a flow.
+
+        A *pinned* id (``http.oauth.pinned_clients``) is different. It was
+        registered into an earlier process's memory and orphaned by a
+        restart, so a long-lived connector keeps replaying an id that no
+        longer exists here. Honouring it is the safe form of that escape
+        hatch, and only because it is named in the operator's own config and
+        its redirect URI is held to ``_check_redirect_uri`` like any other --
+        an id nobody pinned is still refused, exactly as before.
+        """
         if not client_id:
             return None
-        return self._clients.get(client_id)
+        client = self._clients.get(client_id)
+        if client is not None:
+            return client
+        if client_id in set(self._oauth.pinned_clients):
+            pinned = OAuthClientInformationFull(
+                client_id=client_id,
+                client_name="Pinned client (config)",
+                redirect_uris=list(self._oauth.pinned_redirect_uris),
+                grant_types=["authorization_code", "refresh_token"],
+                response_types=["code"],
+                token_endpoint_auth_method="client_secret_post",
+                scope=" ".join(self._scopes),
+            )
+            # Config is operator-controlled, not attacker-controlled, but a
+            # typo must still fail loudly at startup rather than silently
+            # admitting a URI the policy would otherwise reject.
+            for uri in pinned.redirect_uris or ():
+                self._check_redirect_uri(str(uri))
+            self._clients.set(client_id, pinned, ttl_seconds=_CLIENT_TTL_SECONDS)
+            return pinned
+        return None
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         """Store a DCR registration after enforcing the redirect-URI policy.

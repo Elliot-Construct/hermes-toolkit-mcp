@@ -243,6 +243,18 @@ class OAuthServerConfig(BaseModel):
     # Bound on DCR-created clients: registration is anonymous, so the store
     # must not be growable by an unauthenticated caller.
     max_registered_clients: PositiveInt = 512
+    # Client IDs this server accepts even though it never saw them register.
+    # Registration is in-memory, so a restart orphans every previously
+    # registered client and a long-lived connector keeps retrying an ID that
+    # no longer exists. Listing the ID here (pinned to its redirect URI below)
+    # is the safe form of that escape hatch: an UNNAMED id is still refused
+    # outright, and a listed one is still held to the redirect-URI policy in
+    # _check_redirect_uri. Default empty = memory-only, the secure default.
+    pinned_clients: list[str] = Field(default_factory=list)
+    # Redirect URIs allowed for the pinned clients above. A pinned client's
+    # authorization request must name one of these exactly, so pinning an ID
+    # can never widen where a code may be delivered.
+    pinned_redirect_uris: list[str] = Field(default_factory=list)
 
     @field_validator("issuer")
     @classmethod
