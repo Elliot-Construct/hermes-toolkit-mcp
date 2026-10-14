@@ -6,9 +6,10 @@ from typing import Any, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from ..api_client import HermesApiClient, HermesApiClientError, RouteDeniedError
-from ..bounded_page import BoundedOutputError, build_bounded_page
+from ..bounded_page import BoundedOutputError, build_bounded_page, limit_in_bounds, offset_in_bounds
 from ..config import ToolkitMcpConfig
 from ..discovery import DiscoveryError
+from ..redaction import Redactor
 
 MAX_QUERY_PARAM_CHARS = 2048
 MAX_RESPONSE_ID_CHARS = 256
@@ -401,6 +402,98 @@ class ToolsetsListRequest(BaseModel):
 
 SKILLS_LIST_INPUT_SCHEMA: dict[str, Any] = SkillsListRequest.model_json_schema()
 TOOLSETS_LIST_INPUT_SCHEMA: dict[str, Any] = ToolsetsListRequest.model_json_schema()
+
+#: Gateway session ids (``20261014_123120_3b8d85db``, ``api_<ts>_<hex>``, a
+#: resume key). ``/`` and the URL-specials are refused outright: the id is
+#: interpolated into a path, so a traversal character must never reach it.
+_SESSION_ID_PATTERN = r"^[A-Za-z0-9_.:-]+$"
+MAX_SESSION_ID_CHARS = 128
+SESSIONS_LIST_DEFAULT_LIMIT = 50
+SESSIONS_LIST_MAX_LIMIT = 200
+SESSIONS_LIST_ENVELOPE_BUDGET = 32 * 1024
+SESSIONS_LIST_PER_ITEM_BUDGET = 4 * 1024
+SESSION_MESSAGES_DEFAULT_LIMIT = 50
+#: The gateway itself clamps this route to 500 rows; 200 keeps one page well
+#: inside the route's 1 MiB response ceiling, and a longer transcript is read
+#: by paging (next_offset) instead of asking for a bigger slab.
+SESSION_MESSAGES_MAX_LIMIT = 200
+SESSION_MESSAGES_ENVELOPE_BUDGET = 96 * 1024
+SESSION_MESSAGES_PER_ITEM_BUDGET = 32 * 1024
+
+
+class SessionsListRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    limit: int | None = Field(
+        default=None, ge=1, le=SESSIONS_LIST_MAX_LIMIT,
+        description="Page size for the session listing (gateway caps it at 200).",
+    )
+    offset: int | None = Field(default=None, ge=0, description="Rows to skip; page with next_offset.")
+    source: str | None = Field(
+        default=None, max_length=32, pattern=r"^[A-Za-z0-9_-]+$",
+        description="Optional source filter (a2a, telegram, api_server, ...).",
+    )
+    include_children: bool | None = Field(
+        default=None, description="Include child sessions of the listed ones, as the server defines it.",
+    )
+    profile: str | None = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Optional Hermes profile whose sessions are listed. Routed in the URL "
+            "(/p/<profile>/api/sessions) and authenticated with that profile's own "
+            "API_SERVER_KEY from its .env, so the listing is that profile's own session "
+            "store. The default profile omits the argument."
+        ),
+    )
+
+
+class SessionMessagesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str = Field(
+        min_length=1, max_length=MAX_SESSION_ID_CHARS, pattern=_SESSION_ID_PATTERN,
+        description=(
+            "Gateway session id to read, e.g. 20261014_123120_3b8d85db. This is NOT a Runs "
+            "API run_id: /v1/runs/{id}/events cannot answer for it."
+        ),
+    )
+    profile: str | None = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Optional Hermes profile that owns the session. Routed in the URL "
+            "(/p/<profile>/api/sessions/{id}/messages) and authenticated with that profile's "
+            "own API_SERVER_KEY from its .env. The default profile omits the argument."
+        ),
+    )
+    limit: int | None = Field(
+        default=None, ge=1, le=SESSION_MESSAGES_MAX_LIMIT,
+        description="Rows per page (default 50, capped here at 200; the gateway caps at 500).",
+    )
+    offset: int | None = Field(default=None, ge=0, description="Rows to skip; resume with next_offset.")
+    order: Literal["oldest", "latest"] | None = Field(
+        default=None,
+        description=(
+            "Chronological order. Omit for the server default (a single omitted-limit page "
+            "defaults to latest-first; explicit limits default to oldest-first)."
+        ),
+    )
+    include_compacted: bool | None = Field(
+        default=None,
+        description="Include compacted-away lineage rows as well as the live tip (default false).",
+    )
+
+    @field_validator("session_id")
+    @classmethod
+    def _session_id_no_traversal(cls, value: str) -> str:
+        if value.startswith("/") or ".." in value or "?" in value or "#" in value:
+            raise ValueError("session id must not contain path traversal or URL-special characters")
+        return value
+
+
+SESSIONS_LIST_INPUT_SCHEMA: dict[str, Any] = SessionsListRequest.model_json_schema()
+SESSION_MESSAGES_INPUT_SCHEMA: dict[str, Any] = SessionMessagesRequest.model_json_schema()
 
 
 def _schema_message(exc: ValidationError, *, prefix: str) -> str:
@@ -1398,3 +1491,281 @@ def hermes_api_toolsets_list(config: ToolkitMcpConfig, arguments: dict[str, Any]
         query_params=query_params,
         profile=request.profile,
     )
+
+
+#: One redactor shared by the session wrappers. The same patterns that guard
+#: receipts must also guard the payload the caller actually receives, because a
+#: transcript quotes whatever the conversation happened to print.
+_TRANSCRIPT_REDACTOR = Redactor()
+
+
+def _redact_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Redact secrets out of session/message rows and name what was scrubbed."""
+    redacted = _TRANSCRIPT_REDACTOR.redact_mapping(rows)
+    rendered = json.dumps(redacted, ensure_ascii=False, separators=(",", ":"), default=str)
+    return redacted, _TRANSCRIPT_REDACTOR.redact_text(rendered).redactions_applied
+
+
+def _gateway_rows(body: Any, *, wrapper_name: str) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any] | None]:
+    """Split a gateway list envelope into (rows, pagination, envelope dict).
+
+    ``data`` is the gateway's list key for both ``/api/sessions`` and
+    ``/api/sessions/{id}/messages``; a bare list is accepted too, so an
+    upstream shape change surfaces as an explicit error rather than an empty
+    transcript that reads like "this session had no turns".
+    """
+    if isinstance(body, list):
+        rows, pagination, envelope = body, {}, None
+    elif isinstance(body, dict):
+        envelope = body
+        rows = next((value for value in (body.get("data"), body.get("items")) if isinstance(value, list)), None)
+        if rows is None:
+            raise DiscoveryError(
+                "UNEXPECTED_RESPONSE",
+                f"{wrapper_name}: gateway response carries no list of rows, so transcript "
+                "availability cannot be asserted",
+            )
+        pagination = body.get("pagination") if isinstance(body.get("pagination"), dict) else {}
+    else:
+        raise DiscoveryError("UNEXPECTED_RESPONSE", f"{wrapper_name}: gateway response is not a list envelope")
+    return [row for row in rows if isinstance(row, dict)], pagination, envelope
+
+
+def _next_offset(*, offset: int, returned: int, limit: int, total: int | None) -> int | None:
+    """Resume cursor for a server-paged list.
+
+    A full page means more rows may exist, so the caller is told where to
+    continue; a partial page is the end. When the server reports a total, the
+    cursor is only offered while rows remain.
+    """
+    if total is not None:
+        return offset + returned if offset + returned < total else None
+    return offset + returned if returned >= limit else None
+
+
+def hermes_api_sessions_list(config: ToolkitMcpConfig, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Typed wrapper for GET /api/sessions — one profile's session index.
+
+    ``profile`` routes in the URL (``/p/<profile>/api/sessions``) and carries
+    that profile's own ``API_SERVER_KEY``, so the listing is that profile's
+    session store rather than the default home's. Rows are summarised through
+    the bounded page and redacted before they leave the toolkit; session
+    metadata, not message bodies, is what this returns.
+    """
+    try:
+        request = SessionsListRequest.model_validate(arguments or {})
+    except ValidationError as exc:
+        raise DiscoveryError("SCHEMA_INVALID", _schema_message(exc, prefix="sessions list request is invalid")) from exc
+
+    query_params: dict[str, Any] = {}
+    if request.limit is not None:
+        query_params["limit"] = request.limit
+    if request.offset is not None:
+        query_params["offset"] = request.offset
+    if request.source is not None:
+        query_params["source"] = request.source
+    if request.include_children is not None:
+        query_params["include_children"] = str(request.include_children).lower()
+
+    result = _call_metadata_get(
+        config,
+        wrapper_name="hermes_api_sessions_list",
+        path="/api/sessions",
+        request_model=request,
+        query_params=query_params,
+        profile=request.profile,
+    )
+    body = result.pop("response", None)
+    result.pop("response_preview", None)
+    rows, pagination, _ = _gateway_rows(body, wrapper_name="hermes_api_sessions_list")
+    redacted_rows, redactions = _redact_rows(rows)
+
+    limit = limit_in_bounds(request.limit, default=SESSIONS_LIST_DEFAULT_LIMIT, maximum=SESSIONS_LIST_MAX_LIMIT)
+    offset = offset_in_bounds(request.offset, default=0)
+    server_limit = pagination.get("limit")
+    server_limit = server_limit if isinstance(server_limit, int) and server_limit > 0 else limit
+    total = pagination.get("total") if isinstance(pagination.get("total"), int) else None
+
+    envelope_overhead = {
+        "backend": "api",
+        "wrapper": "hermes_api_sessions_list",
+        "run_id": result.get("run_id"),
+        "http_status": result.get("http_status"),
+        "profile": request.profile,
+        "limit": limit,
+        "offset": offset,
+        "total_count": total,
+        "total_known": total is not None,
+        "redactions_applied": redactions,
+        "artifact_dir": result.get("artifact_dir"),
+        "request_receipt": result.get("request_receipt"),
+        "result_receipt": result.get("result_receipt"),
+        "response_receipt": result.get("response_receipt"),
+        "evidence": result.get("evidence", []),
+        "verdict": "pass",
+        "status": "completed",
+        "safe_next_actions": [
+            "Read a session's verbatim transcript with hermes_api_session_messages using its id and the same profile.",
+        ],
+    }
+    try:
+        page = build_bounded_page(
+            items=redacted_rows,
+            arguments=arguments or {},
+            default_limit=SESSIONS_LIST_DEFAULT_LIMIT,
+            max_limit=SESSIONS_LIST_MAX_LIMIT,
+            per_item_budget=SESSIONS_LIST_PER_ITEM_BUDGET,
+            envelope_budget=SESSIONS_LIST_ENVELOPE_BUDGET,
+            id_key="id",
+            items_key="sessions",
+            total_count=total,
+            is_already_paged=True,
+            extra_envelope_overhead=envelope_overhead,
+        )
+    except BoundedOutputError as exc:
+        raise DiscoveryError(
+            "BOUNDED_OUTPUT_ERROR",
+            f"session row for {exc.id_key}={exc.id_value!r} exceeds the {exc.budget} byte "
+            f"per-item budget ({exc.item_bytes} bytes); request a smaller limit",
+        ) from exc
+
+    return {
+        **envelope_overhead,
+        "limit": page.limit,
+        "offset": page.offset,
+        "returned_count": page.returned_count,
+        "next_offset": _next_offset(
+            offset=page.offset, returned=page.returned_count, limit=server_limit, total=total
+        ),
+        "truncated": page.truncated,
+        "byte_limited": page.byte_limited,
+        "envelope_truncated": page.envelope_truncated,
+        "max_limit": page.max_limit,
+        "serialized_item_bytes": page.serialized_item_bytes,
+        "item_truncated_ids": page.item_truncated_ids,
+        "omitted_for_envelope_count": page.omitted_for_envelope_count,
+        "sessions": page.items,
+    }
+
+
+def hermes_api_session_messages(
+    config: ToolkitMcpConfig, arguments: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Typed wrapper for GET /api/sessions/{session_id}/messages — a verbatim transcript.
+
+    This is the canonical read-only source for a GATEWAY conversation: user,
+    assistant, and tool rows in id order, each carrying its role, content,
+    ``tool_calls`` (function name + arguments), ``tool_call_id``, and
+    timestamp. It is deliberately NOT the Runs API: a gateway session id is
+    not a run_id, so ``hermes_api_runs_events`` answers 404 for one and can
+    never supply this transcript.
+
+    ``profile`` routes in the URL (``/p/<profile>/api/sessions/{id}/messages``)
+    and carries that profile's own ``API_SERVER_KEY`, so a transcript is only
+    readable with the owning profile's credential. Pagination mirrors the
+    server's own window (``limit``/``offset``/``order``); ``next_offset``
+    resumes exactly where this page ended. Rows are redacted and byte-bounded
+    before they leave the toolkit, and a row that cannot fit its per-item
+    budget fails loudly rather than being silently shortened.
+    """
+    try:
+        request = SessionMessagesRequest.model_validate(arguments or {})
+    except ValidationError as exc:
+        raise DiscoveryError("SCHEMA_INVALID", _schema_message(exc, prefix="session messages request is invalid")) from exc
+
+    query_params: dict[str, Any] = {}
+    if request.limit is not None:
+        query_params["limit"] = request.limit
+    if request.offset is not None:
+        query_params["offset"] = request.offset
+    if request.order is not None:
+        query_params["order"] = request.order
+    if request.include_compacted is not None:
+        query_params["include_compacted"] = str(request.include_compacted).lower()
+
+    result = _call_metadata_get(
+        config,
+        wrapper_name="hermes_api_session_messages",
+        path=f"/api/sessions/{request.session_id}/messages",
+        request_model=request,
+        query_params=query_params,
+        profile=request.profile,
+    )
+    body = result.pop("response", None)
+    result.pop("response_preview", None)
+    rows, pagination, envelope = _gateway_rows(body, wrapper_name="hermes_api_session_messages")
+    redacted_rows, redactions = _redact_rows(rows)
+
+    limit = limit_in_bounds(request.limit, default=SESSION_MESSAGES_DEFAULT_LIMIT, maximum=SESSION_MESSAGES_MAX_LIMIT)
+    offset = offset_in_bounds(request.offset, default=0)
+    server_limit = pagination.get("limit")
+    server_limit = server_limit if isinstance(server_limit, int) and server_limit > 0 else limit
+    total = pagination.get("total") if isinstance(pagination.get("total"), int) else None
+    # Compression lineage: the gateway answers with the descendant that actually
+    # holds the messages, which is not always the id that was asked for.
+    resolved_session_id = (envelope or {}).get("session_id") or request.session_id
+
+    envelope_overhead = {
+        "backend": "api",
+        "wrapper": "hermes_api_session_messages",
+        "run_id": result.get("run_id"),
+        "http_status": result.get("http_status"),
+        "session_id": resolved_session_id,
+        "requested_session_id": request.session_id,
+        "profile": request.profile,
+        "limit": limit,
+        "offset": offset,
+        "order": pagination.get("order") or request.order,
+        "total_count": total,
+        "total_known": total is not None,
+        "redactions_applied": redactions,
+        "artifact_dir": result.get("artifact_dir"),
+        "request_receipt": result.get("request_receipt"),
+        "result_receipt": result.get("result_receipt"),
+        "response_receipt": result.get("response_receipt"),
+        "evidence": result.get("evidence", []),
+        "verdict": "pass",
+        "status": "completed",
+        "safe_next_actions": [
+            "Page with the same arguments plus offset=next_offset until next_offset is null.",
+        ],
+    }
+    try:
+        page = build_bounded_page(
+            items=redacted_rows,
+            arguments=arguments or {},
+            default_limit=SESSION_MESSAGES_DEFAULT_LIMIT,
+            max_limit=SESSION_MESSAGES_MAX_LIMIT,
+            per_item_budget=SESSION_MESSAGES_PER_ITEM_BUDGET,
+            envelope_budget=SESSION_MESSAGES_ENVELOPE_BUDGET,
+            id_key="id",
+            items_key="messages",
+            total_count=total,
+            is_already_paged=True,
+            extra_envelope_overhead=envelope_overhead,
+        )
+    except BoundedOutputError as exc:
+        raise DiscoveryError(
+            "BOUNDED_OUTPUT_ERROR",
+            f"message row for {exc.id_key}={exc.id_value!r} exceeds the {exc.budget} byte "
+            f"per-item budget ({exc.item_bytes} bytes); request a smaller limit or read the "
+            "artifact receipts, which carry the same rows redacted",
+        ) from exc
+
+    return {
+        **envelope_overhead,
+        "limit": page.limit,
+        "offset": page.offset,
+        "returned_count": page.returned_count,
+        "next_offset": _next_offset(
+            offset=page.offset, returned=page.returned_count, limit=server_limit, total=total
+        ),
+        "truncated": page.truncated,
+        "byte_limited": page.byte_limited,
+        "envelope_truncated": page.envelope_truncated,
+        "max_limit": page.max_limit,
+        "serialized_item_bytes": page.serialized_item_bytes,
+        "item_truncated_ids": page.item_truncated_ids,
+        "omitted_for_envelope_count": page.omitted_for_envelope_count,
+        "messages": page.items,
+    }

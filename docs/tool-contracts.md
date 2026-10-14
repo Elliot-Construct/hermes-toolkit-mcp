@@ -134,11 +134,13 @@ M2b is an internal substrate for future typed wrappers, not an MCP tool by itsel
 
 Authorization fails closed when a route is unknown, explicitly denied, below the configured policy tier, called without the matching typed wrapper name, attempted through raw fallback when fallback is not allowed, supplied arbitrary headers, supplied a body where none is permitted, or exceeded the route body limit.
 
-Explicit denied routes cover documented but unwrapped session endpoints such as `POST /api/sessions/{id}/chat`, `POST /api/sessions/{id}/chat/stream`, `PATCH /api/sessions/{id}`, `DELETE /api/sessions/{id}`, and `GET /api/sessions/{id}/messages`, plus the a2aorch registry endpoints that have no safe typed wrapper: `POST /api/v1/agents/register` (bearer-token minting), `POST /api/v1/dm` (a bridge send that can block for the full bridge timeout), `GET /api/v1/tasks/{task_id}/sessions/{profile}/{session_id}/messages` (session transcripts), `GET /api/v1/system/logs`, and `POST /api/v1/system/pause`, `/resume`, `/reconcile`.
+Explicit denied routes cover documented but unwrapped session endpoints such as `POST /api/sessions/{id}/chat`, `POST /api/sessions/{id}/chat/stream`, `PATCH /api/sessions/{id}`, and `DELETE /api/sessions/{id}` (reads of `GET /api/sessions/{id}/messages` now have the typed `hermes_api_session_messages` wrapper, so they are allowed rather than denied), plus the a2aorch registry endpoints that have no safe typed wrapper: `POST /api/v1/agents/register` (bearer-token minting), `POST /api/v1/dm` (a bridge send that can block for the full bridge timeout), `GET /api/v1/tasks/{task_id}/sessions/{profile}/{session_id}/messages` (session transcripts), `GET /api/v1/system/logs`, and `POST /api/v1/system/pause`, `/resume`, `/reconcile`.
 
 The client uses `httpx` with bounded timeouts and `follow_redirects=false`. It requires `allow_live_api_calls=true`, accepts only JSON responses, denies redirects, and writes private `request-receipt.json` / `result-receipt.json` / `response-receipt.json` artifacts with body hashes, byte counts, bounded redacted previews, credential env name/presence plus `credential_source`, and no raw bearer value.
 
-Two origins are served by one client: `hermes.api.base_url` for the Hermes `/v1` and `/api/jobs` surfaces (bearer built only from the configured env var) and `a2aorch.base_url` for `/api/v1/...` registry routes (bearer built from `a2aorch.token_env`, falling back to `a2aorch.token` in the config file, env winning). Registry requests additionally carry `request.api_surface = "a2aorch"` in their receipt.
+Two origins are served by one client: `hermes.api.base_url` for the Hermes `/v1` and `/api/...` surfaces (bearer built only from the configured env var) and `a2aorch.base_url` for `/api/v1/...` registry routes (bearer built from `a2aorch.token_env`, falling back to `a2aorch.token` in the config file, env winning). Registry requests additionally carry `request.api_surface = "a2aorch"` in their receipt.
+
+Profile routing is a URL contract on both Hermes surfaces. The gateway's prefix middleware resolves `/p/<profile>/…` and hands the tail to that profile's own shared-listener adapter, so `/p/<profile>/v1/...` and `/p/<profile>/api/sessions…` are both addressable, each authenticated with that profile's own `API_SERVER_KEY` from its `.env`. Routes that cannot carry the prefix — the gateway-level `/health` family and the separate a2aorch `/api/v1/...` origin — refuse the `profile` argument locally with `PROFILE_NOT_ROUTABLE` rather than sending a prefix that would resolve to nothing.
 
 ## M2c `hermes_api_chat_completions`
 
@@ -155,6 +157,49 @@ The wrapper is mocked/local-first. Loopback API base URLs are allowed when polic
 `hermes_api_jobs_list` is a typed `GET /api/jobs` wrapper with concrete integer defaults (`limit=25`, `offset=0`), prompt-omission summaries, and bounded pagination. It sends `limit`/`offset` upstream even on bare calls, records original upstream body bytes/hash in receipts, and uses a 24 KiB projected-item budget and a 32 KiB final-envelope budget. The full job definition remains available through `hermes_api_jobs_get(job_id)`. Other scheduler wrappers (`create`, `get`, `update`, `delete`, `pause`, `resume`, `run`) are exposed at `api_call` tier with receipts and the same fail-closed route-table behavior.
 
 The optional `hermes_agent_ask_fallback` API backend delegates to `hermes_api_chat_completions` rather than issuing a raw `urllib` call to `/chat/completions`, so fallback cannot bypass a route that now has a typed wrapper.
+
+## M2c `hermes_api_sessions_list` and `hermes_api_session_messages` (gateway transcripts)
+
+A **gateway session** (Telegram, A2A, cron, desktop, API-server chat) is not a Runs API run. Its conversation lives in the profile's session store, and the canonical read-only source is `GET /api/sessions/{session_id}/messages` on the gateway API server, which returns rows carrying `role`, `content`, `tool_calls` (function `name` + `arguments`), `tool_call_id`, and `timestamp`, in id order. `/v1/runs/{run_id}/events` can never answer for one: a run is a handle on a live agent process, a session id is not a run_id. Both facts were behind INFRA-50, where the absence of a wrapper plus a coarse 404 mapping reported "profile not served" for a session that was in fact served and readable.
+
+`hermes_api_sessions_list` (`GET /api/sessions`) returns one profile's session index; `hermes_api_session_messages` (`GET /api/sessions/{session_id}/messages`) returns a transcript page. Both:
+
+- register at `api_metadata` tier (`idempotent=true`, `readOnlyHint=true`, no model or agent-tool gate);
+- route a named `profile` in the URL with that profile's own `API_SERVER_KEY`, and take the bare path plus the process credential for the default home;
+- paginate and byte-bound their output (sessions: 50/200 rows, 4 KiB per row, 32 KiB envelope; messages: 50/200 rows, 32 KiB per row, 96 KiB envelope), returning `next_offset`, `returned_count`, `total_known`, and the truncation flags instead of a slab that may exceed the route's 1 MiB ceiling;
+- redact every returned row and report the scrubbed pattern kinds in `redactions_applied`, while receipts carry hashes and previews only;
+- fail loudly on a row that cannot fit its per-item budget (`BOUNDED_OUTPUT_ERROR`) rather than silently shortening a transcript;
+- issue GET requests only, so the reads cannot write to `state.db` or disturb a running turn.
+
+Error codes stay distinct and actionable: `SESSION_NOT_FOUND` (the profile route served the request; the id is absent — page `hermes_api_sessions_list`), `RUN_NOT_FOUND` (same, for a run id, with the session-vs-run distinction spelled out), `PROFILE_NOT_SERVED` (the gateway does not multiplex that profile — and only when the gateway's own 404 body says so), `PROFILE_KEY_UNAUTHORIZED`, `PROFILE_KEY_MISSING`, `PROFILE_NOT_SELECTABLE`.
+
+Tested example for REFLEX-12, run against the live multiplexed gateway (127.0.0.1:8650) with `hermes.homes.default` pointing at the gateway root home so the toolkit resolves `profiles/alfred/.env`:
+
+```text
+hermes_api_sessions_list  {"profile": "alfred", "limit": 5}
+  -> 20261014_123120_3b8d85db | a2a | msgs: 288 | Fix Alfred Hermes transcript retrieval
+     20261014_122645_d0e84b15 | a2a | msgs:  70 | Implement composable browser tutorials
+
+hermes_api_session_messages {"profile": "alfred", "session_id": "20261014_122645_d0e84b15", "limit": 4}
+  -> returned: 4 | next_offset: 4 | order: oldest | max_limit: 200
+     id=37940 role=user      tool_calls=[]        ts=1791977205.910887
+     id=37941 role=assistant tool_calls=['skill_view', 'tool_search'] ts=1791977217.9061391
+     id=37942 role=tool      tool_calls=[]        ts=1791977221.2875712
+     id=37943 role=tool      tool_calls=[]        ts=1791977221.2917445
+  (followed offset=4 -> returned 4, next_offset 8, first id 37944)
+
+hermes_api_runs_events   {"profile": "alfred", "run_id": "20261014_122645_d0e84b15"}
+  -> RUN_NOT_FOUND: ... a gateway session id is not a Runs API run_id, so conversation
+     transcripts are read with hermes_api_session_messages, never hermes_api_runs_events
+
+hermes_api_session_messages {"profile": "alfred", "session_id": "no_such_session_abc123"}
+  -> SESSION_NOT_FOUND: ... list that profile's sessions with hermes_api_sessions_list
+
+hermes_api_session_messages {"profile": "public-receptionist", "session_id": "..."}
+  -> PROFILE_NOT_SELECTABLE (withheld profile, refused before any request)
+```
+
+So the REFLEX-12 hourly progress report reads a session index with `hermes_api_sessions_list`, then expands the conversation with `hermes_api_session_messages` — paging with `next_offset` — under the owning profile's credential, with redaction and byte bounds applied to every row it surfaces.
 
 ## M2d protocol and denial guardrails
 

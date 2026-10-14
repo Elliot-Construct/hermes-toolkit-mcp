@@ -45,6 +45,8 @@ from .api_wrappers.hermes_api import (
     RUNS_STOP_INPUT_SCHEMA,
     SKILLS_LIST_INPUT_SCHEMA,
     TOOLSETS_LIST_INPUT_SCHEMA,
+    SESSIONS_LIST_INPUT_SCHEMA,
+    SESSION_MESSAGES_INPUT_SCHEMA,
     hermes_api_capabilities_get,
     hermes_api_health,
     hermes_api_health_detailed,
@@ -66,6 +68,8 @@ from .api_wrappers.hermes_api import (
     hermes_api_runs_start,
     hermes_api_runs_stop,
     hermes_api_skills_list,
+    hermes_api_session_messages,
+    hermes_api_sessions_list,
     hermes_api_toolsets_list,
 )
 from .api_wrappers.a2aorch_api import (
@@ -781,6 +785,29 @@ TOOL_SPECS: dict[str, ToolSpec] = {
         hermes_api_toolsets_list,
         TOOLSETS_LIST_INPUT_SCHEMA,
     ),
+    "hermes_api_sessions_list": ToolSpec(
+        _api_metadata_metadata("hermes_api_sessions_list", "List Hermes gateway sessions"),
+        (
+            "Typed GET /api/sessions wrapper that lists one profile's persisted gateway sessions "
+            "(id, source, counts, timestamps, preview), paginated and redacted. `profile` routes "
+            "in the URL with that profile's own API_SERVER_KEY; omit it for the default home."
+        ),
+        hermes_api_sessions_list,
+        SESSIONS_LIST_INPUT_SCHEMA,
+    ),
+    "hermes_api_session_messages": ToolSpec(
+        _api_metadata_metadata("hermes_api_session_messages", "Read Hermes session transcript"),
+        (
+            "Typed GET /api/sessions/{session_id}/messages wrapper that returns a gateway "
+            "conversation verbatim: role, content, tool_calls (name and arguments), tool_call_id "
+            "and timestamp per row, paginated with limit/offset/order and redacted. A gateway "
+            "session id is not a Runs API run_id, so this is the transcript source for gateway "
+            "sessions; hermes_api_runs_events cannot serve one. `profile` routes in the URL with "
+            "that profile's own API_SERVER_KEY; omit it for the default home."
+        ),
+        hermes_api_session_messages,
+        SESSION_MESSAGES_INPUT_SCHEMA,
+    ),
     "hermes_api_jobs_list": ToolSpec(
         _api_metadata_metadata("hermes_api_jobs_list", "List Hermes scheduled jobs"),
         "Typed GET /api/jobs wrapper that lists scheduled Hermes cron jobs from the configured Hermes API server, with optional limit, offset, and status filter, writing redacted receipts.",
@@ -1157,7 +1184,16 @@ def _finalize_envelope(envelope: ResultEnvelope) -> dict[str, Any]:
     mapped = redact_mapping(raw)
     rendered = json.dumps(mapped, sort_keys=True, default=str)
     redacted = redact_text(rendered)
-    parsed = json.loads(redacted.text)
+    try:
+        parsed = json.loads(redacted.text)
+    except json.JSONDecodeError:
+        # The regex pass is textual, and ``credential_key_value``'s optional
+        # trailing quote can swallow the closing quote of a JSON string, which
+        # turns a redacted envelope back into invalid JSON. The mapping pass
+        # above already redacted every string value structurally, so it is the
+        # safe, parseable form; fall back to it instead of crashing on a
+        # success path or returning unparseable text.
+        parsed = mapped
     redactions = list(dict.fromkeys([*parsed.get("redactions_applied", []), *redacted.redactions_applied]))
     parsed["redactions_applied"] = redactions
     return parsed
