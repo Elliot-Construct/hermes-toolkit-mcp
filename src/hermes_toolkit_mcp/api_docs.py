@@ -179,6 +179,20 @@ WRAPPER_MAPPING: tuple[dict[str, str], ...] = (
         "section_slug": "skills-and-toolsets-discovery",
         "status": "implemented_typed_wrapper",
     },
+    {
+        "endpoint": "GET /api/sessions",
+        "tool": "hermes_api_sessions_list",
+        "policy_tier": "api_metadata",
+        "section_slug": "sessions-api-session-control-over-rest",
+        "status": "implemented_typed_wrapper",
+    },
+    {
+        "endpoint": "GET /api/sessions/{session_id}/messages",
+        "tool": "hermes_api_session_messages",
+        "policy_tier": "api_metadata",
+        "section_slug": "sessions-api-session-control-over-rest",
+        "status": "implemented_typed_wrapper",
+    },
 )
 
 

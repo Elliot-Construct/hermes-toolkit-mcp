@@ -547,9 +547,13 @@ def test_default_profile_401_keeps_the_generic_status_error(
 def test_profile_on_a_non_routable_surface_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A wrapper that cannot express the profile in the URL must reject it.
 
-    ``/api/jobs`` is on the same origin but the multiplex prefix is a ``/v1``
-    route family; rather than send a prefix that would not resolve, the client
-    refuses the argument.
+    ``/health`` is a gateway-level route: it has no per-profile instance, so a
+    ``/p/<profile>/`` prefix there would resolve to nothing. Rather than send a
+    prefix that cannot resolve, the client refuses the argument. (The REST
+    surface under ``/api/sessions`` and ``/api/jobs`` IS profile-routable —
+    the gateway dispatches ``/p/<profile>/<tail>`` to that profile's own
+    adapter — so those no longer refuse; the a2aorch ``/api/v1`` origin still
+    does, and is covered separately.)
     """
 
     monkeypatch.setenv("HERMES_TOOLKIT_TEST_API_KEY", DEFAULT_KEY)
@@ -559,8 +563,31 @@ def test_profile_on_a_non_routable_surface_is_refused(tmp_path: Path, monkeypatc
     with pytest.raises(HermesApiClientError) as excinfo:
         client.request(
             "GET",
-            "/api/jobs",
-            typed_wrapper_name="hermes_api_jobs_list",
+            "/health",
+            typed_wrapper_name="hermes_api_health",
+            profile="arthur",
+        )
+    assert excinfo.value.code == "PROFILE_NOT_ROUTABLE"
+
+
+def test_a2aorch_surface_stays_profile_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The a2aorch registry is another origin: a multiplex prefix cannot reach it.
+
+    ``/api/v1/...`` looks like the REST surface but is served by the registry
+    gateway, which has no ``/p/<profile>`` route and authenticates with its own
+    token. Routing a Hermes profile there would send the profile's API key to a
+    different service and address nothing, so it is refused locally.
+    """
+
+    monkeypatch.setenv("HERMES_TOOLKIT_TEST_API_KEY", DEFAULT_KEY)
+    config = _config(tmp_path, api_base_url="http://127.0.0.1:9")
+    client = HermesApiClient(config)
+
+    with pytest.raises(HermesApiClientError) as excinfo:
+        client.request(
+            "GET",
+            "/api/v1/projects",
+            typed_wrapper_name="hermes_a2aorch_projects_list",
             profile="arthur",
         )
     assert excinfo.value.code == "PROFILE_NOT_ROUTABLE"

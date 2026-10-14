@@ -25,10 +25,72 @@ from .redaction import redact_text
 #: with the rule named instead.
 _PROFILE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
-#: Multiplex routes live on the Hermes API surface only. The a2aorch registry is
-#: a separate service with its own origin and token, so a profile prefix there
-#: would address nothing.
-_PROFILE_ROUTABLE_PREFIX = "/v1"
+#: Path families the gateway serves under a ``/p/<profile>/`` prefix. The
+#: prefix middleware resolves the profile and hands the tail to that profile's
+#: own shared-listener adapter, so BOTH the OpenAI-compatible surface
+#: (``/v1/...``) and the REST surface (``/api/sessions...``, ``/api/jobs``)
+#: are addressable per profile. The a2aorch registry (``/api/v1/...``) is a
+#: different origin with no multiplex route and stays outside this tuple.
+_PROFILE_ROUTABLE_PREFIXES: tuple[str, ...] = ("/v1", "/api/")
+
+
+def _is_profile_routable(path_pattern: str) -> bool:
+    """True when ``path_pattern`` can carry a ``/p/<profile>/`` prefix.
+
+    A multiplex prefix the gateway does not resolve would be silently dropped
+    by nothing and rejected as a 404, so anything this returns False for must
+    refuse the ``profile`` argument locally instead of sending it.
+    """
+    if path_pattern.startswith("/api/v1"):
+        return False
+    return path_pattern.startswith(_PROFILE_ROUTABLE_PREFIXES)
+
+
+#: Gateway 404 bodies that name a MISSING RESOURCE on a route the gateway DID
+#: serve. The multiplex prefix middleware answers an unserved profile with the
+#: flat string ``{"error": "Unknown or unconfigured profile"}``; a handler that
+#: simply cannot find the id answers with the OpenAI error object and a
+#: machine-readable ``code``. Collapsing the second into the first is how a
+#: missing run id got reported as "profile not served" (INFRA-50).
+_PROFILED_RESOURCE_404_CODES: dict[str, tuple[str, str]] = {
+    "run_not_found": (
+        "RUN_NOT_FOUND",
+        "the profile route served this request, but no run with that id exists in that "
+        "profile's run store; a gateway session id is not a Runs API run_id, so conversation "
+        "transcripts are read with hermes_api_session_messages, never hermes_api_runs_events",
+    ),
+    "session_not_found": (
+        "SESSION_NOT_FOUND",
+        "the profile route served this request, but no session with that id exists in that "
+        "profile's session store; list that profile's sessions with hermes_api_sessions_list",
+    ),
+}
+
+
+def _profiled_resource_404(response: "httpx.Response") -> HermesApiClientError | None:
+    """Map a gateway 404 that positively names a missing resource to its code.
+
+    Returns ``None`` for anything else, so an unrecognised 404 keeps the
+    conservative ``PROFILE_NOT_SERVED`` diagnosis rather than asserting that a
+    merely-unrecognised body means the id is absent.
+    """
+    try:
+        decoded = response.json()
+    except Exception:
+        return None
+    error = decoded.get("error") if isinstance(decoded, dict) else None
+    if not isinstance(error, dict):
+        return None
+    code = error.get("code")
+    if not isinstance(code, str):
+        return None
+    mapped = _PROFILED_RESOURCE_404_CODES.get(code)
+    if mapped is None:
+        return None
+    error_code, guidance = mapped
+    upstream_message = error.get("message")
+    detail = f"Gateway said: {upstream_message}. " if isinstance(upstream_message, str) else ""
+    return HermesApiClientError(error_code, f"{detail}{guidance}")
 
 
 class RouteDeniedError(ValueError):
@@ -268,7 +330,6 @@ def _denied_route(method: str, path_pattern: str, *, reason: str) -> HermesApiRo
 EXPLICITLY_DENIED_ROUTES: tuple[HermesApiRoute, ...] = (
     _denied_route("PATCH", "/api/sessions/{id}", reason="session mutation has no typed wrapper"),
     _denied_route("DELETE", "/api/sessions/{id}", reason="session deletion has no typed wrapper"),
-    _denied_route("GET", "/api/sessions/{id}/messages", reason="session transcript read has no typed wrapper"),
     _denied_route("POST", "/api/sessions/{id}/chat", reason="synchronous session chat has no typed wrapper"),
     _denied_route("POST", "/api/sessions/{id}/chat/stream", reason="session chat stream has no typed wrapper"),
     # a2aorch: bearer-token minting is a credential operation, never wrapped —
@@ -488,6 +549,9 @@ class HermesApiClient:
                     f"{routing.env_path}; it never inherits the default profile's key",
                 )
             if response.status_code == 404:
+                resource_error = _profiled_resource_404(response)
+                if resource_error is not None:
+                    return resource_error
                 return HermesApiClientError(
                     "PROFILE_NOT_SERVED",
                     f"profile '{routing.profile}' is not served by this gateway: the /p/"
@@ -553,10 +617,10 @@ class HermesApiClient:
                 env_path=None,
             )
 
-        if not route.path_pattern.startswith(_PROFILE_ROUTABLE_PREFIX):
+        if not _is_profile_routable(route.path_pattern):
             raise HermesApiClientError(
                 "PROFILE_NOT_ROUTABLE",
-                f"profile routing needs a {_PROFILE_ROUTABLE_PREFIX} path; "
+                f"profile routing needs a {' or '.join(_PROFILE_ROUTABLE_PREFIXES)} path; "
                 f"{route.path_pattern} is served by a different origin that has no /p/<profile> route",
             )
 
